@@ -1,0 +1,16 @@
+computerName: "my-macbook"
+
+mqtt:
+  host: "127.0.0.1"
+  port: 1883
+  username: null
+  password: null
+  useTLS: false
+  keepAliveSeconds: 30
+
+topics:
+  base: "mac2mqtt"
+
+intervals:
+  volumeSeconds: 2
+  batterySeconds: 60
