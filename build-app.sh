@@ -6,9 +6,10 @@ APP_DIR="./dist/${APP_NAME}"
 ICONSET_DIR="./dist/Mac2MQTT.iconset"
 ICON_PNG="./dist/icon-1024.png"
 ICON_SWIFT="./dist/render-icon.swift"
+BUILD_DIR="${MAC2MQTT_BUILD_DIR:-/tmp/mac2mqtt-main-build}"
 
 echo "Building release binaries..."
-swift build -c release
+swift build -c release --scratch-path "${BUILD_DIR}"
 
 echo "Creating app bundle..."
 rm -rf "./dist"
@@ -88,8 +89,8 @@ sips -z 512 512   "${ICON_PNG}" --out "${ICONSET_DIR}/icon_256x256@2x.png" >/dev
 sips -z 512 512   "${ICON_PNG}" --out "${ICONSET_DIR}/icon_512x512.png" >/dev/null
 iconutil -c icns "${ICONSET_DIR}" -o "${APP_DIR}/Contents/Resources/AppIcon.icns"
 
-cp "./.build/release/mac2mqtt-ui" "${APP_DIR}/Contents/MacOS/mac2mqtt-ui"
-cp "./.build/release/mac2mqttd" "${APP_DIR}/Contents/Resources/mac2mqttd"
+cp "${BUILD_DIR}/release/mac2mqtt-ui" "${APP_DIR}/Contents/MacOS/mac2mqtt-ui"
+cp "${BUILD_DIR}/release/mac2mqttd" "${APP_DIR}/Contents/Resources/mac2mqttd"
 cp "./mac2mqtt.yaml.example" "${APP_DIR}/Contents/Resources/mac2mqtt.yaml.example"
 chmod +x "${APP_DIR}/Contents/MacOS/mac2mqtt-ui"
 chmod +x "${APP_DIR}/Contents/Resources/mac2mqttd"
