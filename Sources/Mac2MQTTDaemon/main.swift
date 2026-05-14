@@ -78,16 +78,44 @@ func setMuted(_ value: Bool) throws {
     _ = try runProcess("/usr/bin/osascript", ["-e", script])
 }
 
-func batteryPercent() throws -> Int {
+func batteryPercent() throws -> Int? {
     let output = try runProcess("/usr/bin/pmset", ["-g", "batt"])
+    if output.localizedCaseInsensitiveContains("no batteries") {
+        return nil
+    }
+
     let regex = try NSRegularExpression(pattern: "(\\d+)%")
     let nsString = output as NSString
     let range = NSRange(location: 0, length: nsString.length)
     if let match = regex.firstMatch(in: output, range: range),
        match.numberOfRanges > 1 {
-        return Int(nsString.substring(with: match.range(at: 1))) ?? 0
+        return Int(nsString.substring(with: match.range(at: 1)))
     }
-    return 0
+    return nil
+}
+
+func powerSource() throws -> String? {
+    let output = try runProcess("/usr/bin/pmset", ["-g", "batt"])
+    if output.localizedCaseInsensitiveContains("no batteries") {
+        return nil
+    }
+
+    let regex = try NSRegularExpression(pattern: "Now drawing from '([^']+)'")
+    let nsString = output as NSString
+    let range = NSRange(location: 0, length: nsString.length)
+    guard let match = regex.firstMatch(in: output, range: range),
+          match.numberOfRanges > 1 else {
+        return nil
+    }
+
+    let source = nsString.substring(with: match.range(at: 1)).lowercased()
+    if source.contains("battery") {
+        return "battery"
+    }
+    if source.contains("ac power") {
+        return "ac_power"
+    }
+    return source.replacingOccurrences(of: " ", with: "_")
 }
 
 func sleepMac() throws {
@@ -100,6 +128,63 @@ func shutdownMac() throws {
 
 func displaySleep() throws {
     _ = try runProcess("/usr/bin/pmset", ["displaysleepnow"])
+}
+
+func displayWake() throws {
+    _ = try runProcess("/usr/bin/caffeinate", ["-u", "-t", "2"])
+}
+
+func currentFocusMode() -> String? {
+    let keys = [
+        ["/usr/bin/defaults", "-currentHost", "read", "com.apple.notificationcenterui", "doNotDisturb"],
+        ["/usr/bin/defaults", "read", "com.apple.notificationcenterui", "doNotDisturb"]
+    ]
+
+    for command in keys {
+        guard let launchPath = command.first else { continue }
+        let args = Array(command.dropFirst())
+        guard let output = try? runProcess(launchPath, args) else { continue }
+        if output == "1" || output.lowercased() == "true" {
+            return "do_not_disturb"
+        }
+        if output == "0" || output.lowercased() == "false" {
+            return "off"
+        }
+    }
+
+    return nil
+}
+
+func appleScriptQuoted(_ value: String) -> String {
+    let escaped = value
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+    return "\"\(escaped)\""
+}
+
+func speak(_ text: String) throws {
+    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    _ = try runProcess("/usr/bin/say", [text])
+}
+
+func notificationParts(from payload: String) -> (title: String, message: String) {
+    let fallbackTitle = "Mac2MQTT"
+    let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let data = trimmed.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        return (fallbackTitle, payload)
+    }
+
+    let title = object["title"] as? String ?? fallbackTitle
+    let message = object["message"] as? String ?? object["body"] as? String ?? ""
+    return (title, message)
+}
+
+func showNotification(_ payload: String) throws {
+    let parts = notificationParts(from: payload)
+    guard !parts.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    let script = "display notification \(appleScriptQuoted(parts.message)) with title \(appleScriptQuoted(parts.title))"
+    _ = try runProcess("/usr/bin/osascript", ["-e", script])
 }
 
 func isDisplayOn() -> Bool {
@@ -165,11 +250,30 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
         do {
             mqtt.publish("\(baseTopic)/status/volume", withString: String(try currentVolume()), qos: .qos1, retained: true)
             mqtt.publish("\(baseTopic)/status/mute", withString: String(try isMuted()), qos: .qos1, retained: true)
-            mqtt.publish("\(baseTopic)/status/battery", withString: String(try batteryPercent()), qos: .qos1, retained: true)
+            publishBatteryStatus()
+            publishFocusStatus()
             publishDisplayStatus()
         } catch {
             print("Status update error: \(error)")
         }
+    }
+
+    private func publishBatteryStatus() {
+        do {
+            if let percent = try batteryPercent() {
+                mqtt.publish("\(baseTopic)/status/battery", withString: String(percent), qos: .qos1, retained: true)
+                mqtt.publish("\(baseTopic)/status/power_source", withString: try powerSource() ?? "", qos: .qos1, retained: true)
+            } else {
+                mqtt.publish("\(baseTopic)/status/battery", withString: "", qos: .qos1, retained: true)
+                mqtt.publish("\(baseTopic)/status/power_source", withString: "", qos: .qos1, retained: true)
+            }
+        } catch {
+            print("Battery status error: \(error)")
+        }
+    }
+
+    private func publishFocusStatus() {
+        mqtt.publish("\(baseTopic)/status/focus_mode", withString: currentFocusMode() ?? "", qos: .qos1, retained: true)
     }
 
     private func publishDisplayStatus() {
@@ -202,11 +306,7 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
         batteryTimer.schedule(deadline: .now(), repeating: config.intervals.batterySeconds)
         batteryTimer.setEventHandler { [weak self] in
             guard let self else { return }
-            do {
-                self.mqtt.publish("\(self.baseTopic)/status/battery", withString: String(try batteryPercent()), qos: .qos1, retained: true)
-            } catch {
-                print("Battery poll error: \(error)")
-            }
+            self.publishBatteryStatus()
         }
         batteryTimer.resume()
         self.batteryTimer = batteryTimer
@@ -215,6 +315,7 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
         displayTimer.schedule(deadline: .now(), repeating: config.intervals.displaySeconds ?? 5)
         displayTimer.setEventHandler { [weak self] in
             guard let self else { return }
+            self.publishFocusStatus()
             self.publishDisplayStatus()
         }
         displayTimer.resume()
@@ -239,6 +340,18 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
             if payload == "shutdown" { try? shutdownMac() }
         case "\(baseTopic)/command/displaysleep":
             if payload == "displaysleep" { try? displaySleep() }
+        case "\(baseTopic)/command/displaywake":
+            if payload == "displaywake" || payload == "wake" { try? displayWake() }
+        case "\(baseTopic)/command/display":
+            if payload == "sleep" {
+                try? displaySleep()
+            } else if payload == "wake" {
+                try? displayWake()
+            }
+        case "\(baseTopic)/command/say":
+            try? speak(payload)
+        case "\(baseTopic)/command/notification":
+            try? showNotification(payload)
         default:
             break
         }

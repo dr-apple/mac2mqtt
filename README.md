@@ -11,17 +11,24 @@ Modernisierte Swift-Version von `mac2mqtt` fuer aktuelle macOS-Versionen:
   - `status/alive`
   - `status/volume`
   - `status/mute`
-  - `status/battery`
+  - `status/battery` (nur wenn der Mac einen Akku meldet)
+  - `status/power_source` (`ac_power` oder `battery`, nur wenn der Mac einen Akku meldet)
   - `status/display` (`true` = Monitor an, `false` = Monitor aus)
   - `status/display_changed_at` (ISO-8601-Zeitstempel des letzten Monitor-Statuswechsels)
+  - `status/focus_mode` (`off`, `do_not_disturb` oder leer wenn macOS den Status nicht preisgibt)
 - Reagiert auf:
   - `command/volume`
   - `command/mute`
   - `command/sleep`
   - `command/shutdown`
-- `command/displaysleep`
+  - `command/displaysleep`
+  - `command/displaywake`
+  - `command/display` (`sleep` oder `wake`)
+  - `command/say` (Payload wird per macOS-Sprachausgabe vorgelesen)
+  - `command/notification` (Payload als Text oder JSON: `{"title":"Titel","message":"Text"}`)
 
 Damit kannst du z.B. unter `<base>/<computerName>/status/display` sehen, ob mindestens ein angeschlossener Monitor aktiv ist, und unter `<base>/<computerName>/status/display_changed_at`, wann dieser Zustand zuletzt gewechselt hat.
+Auf Macs ohne Akku werden `status/battery` und `status/power_source` nicht als falsche Werte gehalten; vorhandene retained Werte werden beim Start/Polling geleert.
 
 Topic-Schema:
 
