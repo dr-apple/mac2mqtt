@@ -67,6 +67,14 @@ func bundledResourcePath(_ name: String) -> String? {
     Bundle.main.resourceURL?.appendingPathComponent(name).path
 }
 
+func filesDiffer(_ firstPath: String, _ secondPath: String) -> Bool {
+    guard let first = try? Data(contentsOf: URL(fileURLWithPath: firstPath)),
+          let second = try? Data(contentsOf: URL(fileURLWithPath: secondPath)) else {
+        return true
+    }
+    return first != second
+}
+
 func installBundledRuntimeIfNeeded() -> String? {
     let fm = FileManager.default
 
@@ -75,11 +83,14 @@ func installBundledRuntimeIfNeeded() -> String? {
     }
 
     do {
-        if fm.fileExists(atPath: Paths.daemonPath) {
+        if !fm.fileExists(atPath: Paths.daemonPath) {
+            try fm.copyItem(atPath: bundledDaemon, toPath: Paths.daemonPath)
+            _ = run("/bin/chmod", ["755", Paths.daemonPath])
+        } else if filesDiffer(bundledDaemon, Paths.daemonPath) {
             try fm.removeItem(atPath: Paths.daemonPath)
+            try fm.copyItem(atPath: bundledDaemon, toPath: Paths.daemonPath)
+            _ = run("/bin/chmod", ["755", Paths.daemonPath])
         }
-        try fm.copyItem(atPath: bundledDaemon, toPath: Paths.daemonPath)
-        _ = run("/bin/chmod", ["755", Paths.daemonPath])
 
         if !fm.fileExists(atPath: Paths.configPath) {
             if let bundledConfig = bundledResourcePath("mac2mqtt.yaml.example"), fm.fileExists(atPath: bundledConfig) {
@@ -428,6 +439,7 @@ final class SettingsViewController: NSViewController {
         batteryInterval.stringValue = String(Int(config.intervals.batterySeconds))
         displayInterval.stringValue = String(Int(config.intervals.displaySeconds ?? 5))
         mqttTls.state = config.mqtt.useTLS ? .on : .off
+
     }
 
     @objc private func saveTapped() {

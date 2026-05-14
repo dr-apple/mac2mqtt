@@ -11,11 +11,11 @@ Modernisierte Swift-Version von `mac2mqtt` fuer aktuelle macOS-Versionen:
   - `status/alive`
   - `status/volume`
   - `status/mute`
-  - `status/battery` (nur wenn der Mac einen Akku meldet)
-  - `status/power_source` (`ac_power` oder `battery`, nur wenn der Mac einen Akku meldet)
+  - `status/battery` (nur bei Macs mit internem Akku)
+  - `status/power_source` (`ac_power` oder `battery`, nur bei Macs mit internem Akku)
   - `status/display` (`true` = Monitor an, `false` = Monitor aus)
   - `status/display_changed_at` (ISO-8601-Zeitstempel des letzten Monitor-Statuswechsels)
-  - `status/focus_mode` (`off`, `do_not_disturb` oder leer wenn macOS den Status nicht preisgibt)
+  - `status/locked` (`true` = Benutzer-Session ist gesperrt)
 - Reagiert auf:
   - `command/volume`
   - `command/mute`
@@ -25,10 +25,14 @@ Modernisierte Swift-Version von `mac2mqtt` fuer aktuelle macOS-Versionen:
   - `command/displaywake`
   - `command/display` (`sleep` oder `wake`)
   - `command/say` (Payload wird per macOS-Sprachausgabe vorgelesen)
-  - `command/notification` (Payload als Text oder JSON: `{"title":"Titel","message":"Text"}`)
+  - `command/notification` (Payload als Text oder JSON: `{"title":"Titel","message":"Text"}`; erscheint immer als Vordergrund-Dialog)
+  - `command/screensaver` (Name eines nachinstallierten `.saver`)
+  - `command/app` (App per Payload als Name/Pfad/Bundle-ID starten oder aktivieren)
 
 Damit kannst du z.B. unter `<base>/<computerName>/status/display` sehen, ob mindestens ein angeschlossener Monitor aktiv ist, und unter `<base>/<computerName>/status/display_changed_at`, wann dieser Zustand zuletzt gewechselt hat.
-Auf Macs ohne Akku werden `status/battery` und `status/power_source` nicht als falsche Werte gehalten; vorhandene retained Werte werden beim Start/Polling geleert.
+Auf Macs ohne internen Akku werden `status/battery` und `status/power_source` nicht veroeffentlicht; vorhandene retained Werte werden einmal geloescht.
+Apps koennen per Payload als Name (`Safari`), Bundle-ID (`com.apple.Safari`), Pfad (`/Applications/Safari.app`) oder JSON (`{"name":"Safari"}`) gestartet bzw. aktiviert werden.
+Home Assistant bekommt per MQTT Discovery je eine `select`-Entitaet fuer `App` und `Screensaver`. Die Optionen werden aus installierten Apps bzw. nachinstallierten Bildschirmschonern aus `~/Library/Screen Savers` und `/Library/Screen Savers` erzeugt.
 
 Topic-Schema:
 

@@ -1,3 +1,4 @@
+import AppKit
 import CocoaMQTT
 import CoreGraphics
 import Foundation
@@ -80,7 +81,7 @@ func setMuted(_ value: Bool) throws {
 
 func batteryPercent() throws -> Int? {
     let output = try runProcess("/usr/bin/pmset", ["-g", "batt"])
-    if output.localizedCaseInsensitiveContains("no batteries") {
+    if !hasBattery(pmsetOutput: output) {
         return nil
     }
 
@@ -94,9 +95,15 @@ func batteryPercent() throws -> Int? {
     return nil
 }
 
+func hasBattery(pmsetOutput: String? = nil) -> Bool {
+    let output = pmsetOutput ?? ((try? runProcess("/usr/bin/pmset", ["-g", "batt"])) ?? "")
+    return output.localizedCaseInsensitiveContains("InternalBattery") &&
+        output.localizedCaseInsensitiveContains("present: true")
+}
+
 func powerSource() throws -> String? {
     let output = try runProcess("/usr/bin/pmset", ["-g", "batt"])
-    if output.localizedCaseInsensitiveContains("no batteries") {
+    if !hasBattery(pmsetOutput: output) {
         return nil
     }
 
@@ -134,25 +141,55 @@ func displayWake() throws {
     _ = try runProcess("/usr/bin/caffeinate", ["-u", "-t", "2"])
 }
 
-func currentFocusMode() -> String? {
-    let keys = [
-        ["/usr/bin/defaults", "-currentHost", "read", "com.apple.notificationcenterui", "doNotDisturb"],
-        ["/usr/bin/defaults", "read", "com.apple.notificationcenterui", "doNotDisturb"]
+struct InstalledScreenSaver {
+    let name: String
+    let path: String
+
+    var moduleName: String {
+        URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+    }
+}
+
+func installedScreenSavers() -> [InstalledScreenSaver] {
+    let fm = FileManager.default
+    let paths = [
+        "\(NSHomeDirectory())/Library/Screen Savers",
+        "/Library/Screen Savers"
     ]
 
-    for command in keys {
-        guard let launchPath = command.first else { continue }
-        let args = Array(command.dropFirst())
-        guard let output = try? runProcess(launchPath, args) else { continue }
-        if output == "1" || output.lowercased() == "true" {
-            return "do_not_disturb"
-        }
-        if output == "0" || output.lowercased() == "false" {
-            return "off"
-        }
+    return paths.flatMap { directory -> [InstalledScreenSaver] in
+        guard let items = try? fm.contentsOfDirectory(atPath: directory) else { return [] }
+        return items
+            .filter { $0.hasSuffix(".saver") }
+            .map { item in
+                let path = "\(directory)/\(item)"
+                let name = URL(fileURLWithPath: item).deletingPathExtension().lastPathComponent
+                return InstalledScreenSaver(name: name, path: path)
+            }
     }
+    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+}
 
-    return nil
+func screenSaver(for value: String) -> InstalledScreenSaver? {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+
+    return installedScreenSavers().first {
+        $0.path == trimmed || $0.name.caseInsensitiveCompare(trimmed) == .orderedSame
+    }
+}
+
+func setScreenSaver(_ saver: InstalledScreenSaver) throws {
+    _ = try runProcess("/usr/bin/defaults", [
+        "-currentHost", "write", "com.apple.screensaver", "moduleDict",
+        "-dict", "moduleName", saver.moduleName, "path", saver.path, "type", "0"
+    ])
+    _ = try? runProcess("/usr/bin/killall", ["cfprefsd"])
+    _ = try? runProcess("/usr/bin/killall", ["WallpaperAgent"])
+}
+
+func startScreenSaver() throws {
+    _ = try runProcess("/usr/bin/open", ["-b", "com.apple.ScreenSaver.Engine"])
 }
 
 func appleScriptQuoted(_ value: String) -> String {
@@ -183,8 +220,155 @@ func notificationParts(from payload: String) -> (title: String, message: String)
 func showNotification(_ payload: String) throws {
     let parts = notificationParts(from: payload)
     guard !parts.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-    let script = "display notification \(appleScriptQuoted(parts.message)) with title \(appleScriptQuoted(parts.title))"
+
+    let script = """
+    tell application "System Events"
+        activate
+        display dialog \(appleScriptQuoted(parts.message)) with title \(appleScriptQuoted(parts.title)) buttons {"OK"} default button "OK"
+    end tell
+    """
     _ = try runProcess("/usr/bin/osascript", ["-e", script])
+}
+
+func isSessionLocked() -> Bool {
+    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+          let value = session["CGSSessionScreenIsLocked"] else {
+        return false
+    }
+
+    if let locked = value as? Bool {
+        return locked
+    }
+    if let locked = value as? NSNumber {
+        return locked.boolValue
+    }
+    return false
+}
+
+struct AppLaunchRequest {
+    let name: String?
+    let path: String?
+    let bundleID: String?
+}
+
+struct InstalledApp {
+    let name: String
+    let path: String
+    let bundleID: String?
+}
+
+func installedApps() -> [InstalledApp] {
+    let fm = FileManager.default
+    let paths = [
+        "/Applications",
+        "/System/Applications",
+        "\(NSHomeDirectory())/Applications"
+    ]
+    var seen = Set<String>()
+
+    let apps = paths.flatMap { directory -> [InstalledApp] in
+        guard let enumerator = fm.enumerator(atPath: directory) else { return [] }
+        var found: [InstalledApp] = []
+
+        for case let item as String in enumerator {
+            guard item.hasSuffix(".app") else { continue }
+            if item.dropLast(4).contains(".app/") { continue }
+
+            let path = "\(directory)/\(item)"
+            guard !seen.contains(path) else { continue }
+            seen.insert(path)
+
+            let url = URL(fileURLWithPath: path)
+            let name = URL(fileURLWithPath: item).deletingPathExtension().lastPathComponent
+            let bundleID = Bundle(url: url)?.bundleIdentifier
+            found.append(InstalledApp(name: name, path: path, bundleID: bundleID))
+            enumerator.skipDescendants()
+        }
+
+        return found
+    }
+
+    return apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+}
+
+func appNames() -> [String] {
+    var seen = Set<String>()
+    return installedApps().compactMap { app in
+        guard !seen.contains(app.name) else { return nil }
+        seen.insert(app.name)
+        return app.name
+    }
+}
+
+func screenSaverNames() -> [String] {
+    installedScreenSavers().map(\.name)
+}
+
+func appLaunchRequest(from payload: String) -> AppLaunchRequest? {
+    let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+
+    if let data = trimmed.data(using: .utf8),
+       let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        return AppLaunchRequest(
+            name: object["name"] as? String,
+            path: object["path"] as? String,
+            bundleID: object["bundleId"] as? String ?? object["bundleID"] as? String
+        )
+    }
+
+    if trimmed.hasPrefix("/") {
+        return AppLaunchRequest(name: nil, path: trimmed, bundleID: nil)
+    }
+
+    if trimmed.contains(".") && !trimmed.contains(" ") {
+        return AppLaunchRequest(name: nil, path: nil, bundleID: trimmed)
+    }
+
+    return AppLaunchRequest(name: trimmed, path: nil, bundleID: nil)
+}
+
+func activateRunningApp(_ request: AppLaunchRequest) -> Bool {
+    let runningApp = NSWorkspace.shared.runningApplications.first { app in
+        if let bundleID = request.bundleID,
+           app.bundleIdentifier?.caseInsensitiveCompare(bundleID) == .orderedSame {
+            return true
+        }
+        if let path = request.path,
+           app.bundleURL?.path == path {
+            return true
+        }
+        if let name = request.name,
+           app.localizedName?.caseInsensitiveCompare(name) == .orderedSame {
+            return true
+        }
+        return false
+    }
+
+    guard let runningApp else { return false }
+    return runningApp.activate(options: [.activateAllWindows])
+}
+
+func launchOrActivateApp(_ payload: String) throws {
+    guard let request = appLaunchRequest(from: payload) else { return }
+    if activateRunningApp(request) {
+        return
+    }
+
+    if let path = request.path {
+        _ = try runProcess("/usr/bin/open", [path])
+        return
+    }
+
+    if let bundleID = request.bundleID,
+       let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+        _ = try runProcess("/usr/bin/open", [url.path])
+        return
+    }
+
+    if let name = request.name {
+        _ = try runProcess("/usr/bin/open", ["-a", name])
+    }
 }
 
 func isDisplayOn() -> Bool {
@@ -217,6 +401,8 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
     private var displayTimer: DispatchSourceTimer?
     private var lastDisplayState: Bool?
     private var lastDisplayChangedAt = Date()
+    private var clearedBatteryStatus = false
+    private var clearedRemovedStatusTopics = false
 
     private var baseTopic: String {
         "\(config.topics.base)/\(config.computerName)"
@@ -248,32 +434,116 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
 
     private func publishStatus() {
         do {
-            mqtt.publish("\(baseTopic)/status/volume", withString: String(try currentVolume()), qos: .qos1, retained: true)
-            mqtt.publish("\(baseTopic)/status/mute", withString: String(try isMuted()), qos: .qos1, retained: true)
+            publishStatusTopic("volume", String(try currentVolume()))
+            publishStatusTopic("mute", String(try isMuted()))
+            clearRemovedStatusTopics()
             publishBatteryStatus()
-            publishFocusStatus()
             publishDisplayStatus()
+            publishLockStatus()
         } catch {
             print("Status update error: \(error)")
         }
     }
 
+    private func publishStatusTopic(_ suffix: String, _ value: String) {
+        mqtt.publish("\(baseTopic)/status/\(suffix)", withString: value, qos: .qos0, retained: true)
+    }
+
+    private func publishDiscoveryTopic(_ component: String, _ objectID: String, _ payload: [String: Any]) {
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else {
+            return
+        }
+
+        mqtt.publish("homeassistant/\(component)/\(config.computerName)/\(objectID)/config",
+                     withString: json,
+                     qos: .qos0,
+                     retained: true)
+    }
+
+    private func clearDiscoveryTopic(_ component: String, _ objectID: String) {
+        let message = CocoaMQTTMessage(topic: "homeassistant/\(component)/\(config.computerName)/\(objectID)/config",
+                                      payload: [],
+                                      qos: .qos0,
+                                      retained: true)
+        mqtt.publish(message)
+    }
+
+    private func publishHomeAssistantDiscovery() {
+        let device: [String: Any] = [
+            "identifiers": ["mac2mqtt_\(config.computerName)"],
+            "name": config.computerName,
+            "manufacturer": "mac2mqtt",
+            "model": "Mac"
+        ]
+
+        publishDiscoveryTopic("select", "app", [
+            "name": "App",
+            "unique_id": "mac2mqtt_\(config.computerName)_app",
+            "command_topic": "\(baseTopic)/command/app",
+            "availability_topic": "\(baseTopic)/status/alive",
+            "payload_available": "true",
+            "payload_not_available": "false",
+            "optimistic": true,
+            "icon": "mdi:application",
+            "options": appNames(),
+            "device": device
+        ])
+
+        publishDiscoveryTopic("select", "screensaver", [
+            "name": "Screensaver",
+            "unique_id": "mac2mqtt_\(config.computerName)_screensaver",
+            "command_topic": "\(baseTopic)/command/screensaver",
+            "availability_topic": "\(baseTopic)/status/alive",
+            "payload_available": "true",
+            "payload_not_available": "false",
+            "optimistic": true,
+            "icon": "mdi:monitor-screenshot",
+            "options": screenSaverNames(),
+            "device": device
+        ])
+
+        clearDiscoveryTopic("sensor", "apps")
+        if !hasBattery() {
+            clearDiscoveryTopic("sensor", "battery")
+            clearDiscoveryTopic("sensor", "power_source")
+        }
+    }
+
+    private func clearRetainedStatusTopic(_ suffix: String) {
+        let message = CocoaMQTTMessage(topic: "\(baseTopic)/status/\(suffix)", payload: [], qos: .qos0, retained: true)
+        mqtt.publish(message)
+    }
+
+    private func clearRemovedStatusTopics() {
+        guard !clearedRemovedStatusTopics else { return }
+        clearRetainedStatusTopic("apps")
+        clearRetainedStatusTopic("screensaver_selected")
+        clearedRemovedStatusTopics = true
+    }
+
     private func publishBatteryStatus() {
         do {
+            guard hasBattery() else {
+                clearRetainedStatusTopic("battery")
+                clearRetainedStatusTopic("power_source")
+                clearedBatteryStatus = true
+                return
+            }
+
+            clearedBatteryStatus = false
             if let percent = try batteryPercent() {
-                mqtt.publish("\(baseTopic)/status/battery", withString: String(percent), qos: .qos1, retained: true)
-                mqtt.publish("\(baseTopic)/status/power_source", withString: try powerSource() ?? "", qos: .qos1, retained: true)
-            } else {
-                mqtt.publish("\(baseTopic)/status/battery", withString: "", qos: .qos1, retained: true)
-                mqtt.publish("\(baseTopic)/status/power_source", withString: "", qos: .qos1, retained: true)
+                publishStatusTopic("battery", String(percent))
+                publishStatusTopic("power_source", try powerSource() ?? "")
             }
         } catch {
             print("Battery status error: \(error)")
         }
     }
 
-    private func publishFocusStatus() {
-        mqtt.publish("\(baseTopic)/status/focus_mode", withString: currentFocusMode() ?? "", qos: .qos1, retained: true)
+    private func publishLockStatus() {
+        publishStatusTopic("locked", String(isSessionLocked()))
     }
 
     private func publishDisplayStatus() {
@@ -283,18 +553,20 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
         }
         lastDisplayState = displayOn
 
-        mqtt.publish("\(baseTopic)/status/display", withString: String(displayOn), qos: .qos1, retained: true)
-        mqtt.publish("\(baseTopic)/status/display_changed_at", withString: isoTimestamp(lastDisplayChangedAt), qos: .qos1, retained: true)
+        publishStatusTopic("display", String(displayOn))
+        publishStatusTopic("display_changed_at", isoTimestamp(lastDisplayChangedAt))
     }
 
     private func schedulePolling() {
+        cancelPolling()
+
         let volumeTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         volumeTimer.schedule(deadline: .now(), repeating: config.intervals.volumeSeconds)
         volumeTimer.setEventHandler { [weak self] in
             guard let self else { return }
             do {
-                self.mqtt.publish("\(self.baseTopic)/status/volume", withString: String(try currentVolume()), qos: .qos1, retained: true)
-                self.mqtt.publish("\(self.baseTopic)/status/mute", withString: String(try isMuted()), qos: .qos1, retained: true)
+                self.publishStatusTopic("volume", String(try currentVolume()))
+                self.publishStatusTopic("mute", String(try isMuted()))
             } catch {
                 print("Volume poll error: \(error)")
             }
@@ -315,11 +587,20 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
         displayTimer.schedule(deadline: .now(), repeating: config.intervals.displaySeconds ?? 5)
         displayTimer.setEventHandler { [weak self] in
             guard let self else { return }
-            self.publishFocusStatus()
             self.publishDisplayStatus()
+            self.publishLockStatus()
         }
         displayTimer.resume()
         self.displayTimer = displayTimer
+    }
+
+    private func cancelPolling() {
+        volumeTimer?.cancel()
+        volumeTimer = nil
+        batteryTimer?.cancel()
+        batteryTimer = nil
+        displayTimer?.cancel()
+        displayTimer = nil
     }
 
     private func subscribeCommands() {
@@ -352,6 +633,15 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
             try? speak(payload)
         case "\(baseTopic)/command/notification":
             try? showNotification(payload)
+        case "\(baseTopic)/command/screensaver":
+            if let saver = screenSaver(for: payload) {
+                try? setScreenSaver(saver)
+                try? startScreenSaver()
+            } else if payload == "start" {
+                try? startScreenSaver()
+            }
+        case "\(baseTopic)/command/app":
+            try? launchOrActivateApp(payload)
         default:
             break
         }
@@ -366,6 +656,7 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
         }
         print("Connected to MQTT")
         mqtt.publish("\(baseTopic)/status/alive", withString: "true", qos: .qos1, retained: true)
+        publishHomeAssistantDiscovery()
         subscribeCommands()
         publishStatus()
         schedulePolling()
@@ -379,6 +670,7 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
     func mqttDidReceivePong(_ mqtt: CocoaMQTT) {}
     func mqttDidDisconnect(_ mqtt: CocoaMQTT, withError err: Error?) {
         print("Disconnected: \(err?.localizedDescription ?? "none")")
+        cancelPolling()
     }
     func mqtt(_ mqtt: CocoaMQTT, didStateChangeTo state: CocoaMQTTConnState) {}
     func mqtt(_ mqtt: CocoaMQTT, didReceive trust: SecTrust, completionHandler: @escaping (Bool) -> Void) {
