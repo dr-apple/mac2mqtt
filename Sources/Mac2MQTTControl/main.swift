@@ -19,6 +19,7 @@ struct AppConfig: Codable {
     struct Intervals: Codable {
         var volumeSeconds: TimeInterval
         var batterySeconds: TimeInterval
+        var displaySeconds: TimeInterval?
     }
 
     var computerName: String
@@ -74,10 +75,11 @@ func installBundledRuntimeIfNeeded() -> String? {
     }
 
     do {
-        if !fm.fileExists(atPath: Paths.daemonPath) {
-            try fm.copyItem(atPath: bundledDaemon, toPath: Paths.daemonPath)
-            _ = run("/bin/chmod", ["755", Paths.daemonPath])
+        if fm.fileExists(atPath: Paths.daemonPath) {
+            try fm.removeItem(atPath: Paths.daemonPath)
         }
+        try fm.copyItem(atPath: bundledDaemon, toPath: Paths.daemonPath)
+        _ = run("/bin/chmod", ["755", Paths.daemonPath])
 
         if !fm.fileExists(atPath: Paths.configPath) {
             if let bundledConfig = bundledResourcePath("mac2mqtt.yaml.example"), fm.fileExists(atPath: bundledConfig) {
@@ -99,7 +101,7 @@ func defaultConfig() -> AppConfig {
         computerName: Host.current().localizedName?.replacingOccurrences(of: " ", with: "-").lowercased() ?? "my-macbook",
         mqtt: .init(host: "127.0.0.1", port: 1883, username: nil, password: nil, useTLS: false, keepAliveSeconds: 30),
         topics: .init(base: "mac2mqtt"),
-        intervals: .init(volumeSeconds: 2, batterySeconds: 60)
+        intervals: .init(volumeSeconds: 2, batterySeconds: 60, displaySeconds: 5)
     )
 }
 
@@ -307,7 +309,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let window = NSWindow(contentViewController: vc)
         window.title = "mac2mqtt Settings"
-        window.setContentSize(NSSize(width: 540, height: 380))
+        window.setContentSize(NSSize(width: 540, height: 420))
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -351,6 +353,7 @@ final class SettingsViewController: NSViewController {
     private let topicBase = NSTextField()
     private let volumeInterval = NSTextField()
     private let batteryInterval = NSTextField()
+    private let displayInterval = NSTextField()
 
     init(config: AppConfig, onSave: @escaping (AppConfig) -> Void) {
         self.config = config
@@ -375,7 +378,8 @@ final class SettingsViewController: NSViewController {
             [label("MQTT Password"), mqttPass],
             [label("Topic Base"), topicBase],
             [label("Volume Intervall (s)"), volumeInterval],
-            [label("Battery Intervall (s)"), batteryInterval]
+            [label("Battery Intervall (s)"), batteryInterval],
+            [label("Display Intervall (s)"), displayInterval]
         ])
         grid.translatesAutoresizingMaskIntoConstraints = false
         grid.rowSpacing = 10
@@ -422,6 +426,7 @@ final class SettingsViewController: NSViewController {
         topicBase.stringValue = config.topics.base
         volumeInterval.stringValue = String(Int(config.intervals.volumeSeconds))
         batteryInterval.stringValue = String(Int(config.intervals.batterySeconds))
+        displayInterval.stringValue = String(Int(config.intervals.displaySeconds ?? 5))
         mqttTls.state = config.mqtt.useTLS ? .on : .off
     }
 
@@ -435,6 +440,7 @@ final class SettingsViewController: NSViewController {
         config.topics.base = topicBase.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         config.intervals.volumeSeconds = TimeInterval(Int(volumeInterval.stringValue) ?? 2)
         config.intervals.batterySeconds = TimeInterval(Int(batteryInterval.stringValue) ?? 60)
+        config.intervals.displaySeconds = TimeInterval(Int(displayInterval.stringValue) ?? 5)
         onSave(config)
     }
 }

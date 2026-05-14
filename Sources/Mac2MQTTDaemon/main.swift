@@ -1,4 +1,5 @@
 import CocoaMQTT
+import CoreGraphics
 import Foundation
 import Yams
 
@@ -19,6 +20,7 @@ struct AppConfig: Decodable {
     struct Intervals: Decodable {
         let volumeSeconds: TimeInterval
         let batterySeconds: TimeInterval
+        let displaySeconds: TimeInterval?
     }
 
     let computerName: String
@@ -100,11 +102,36 @@ func displaySleep() throws {
     _ = try runProcess("/usr/bin/pmset", ["displaysleepnow"])
 }
 
+func isDisplayOn() -> Bool {
+    var displayCount: UInt32 = 0
+    let countResult = CGGetOnlineDisplayList(0, nil, &displayCount)
+    guard countResult == .success, displayCount > 0 else {
+        return CGDisplayIsActive(CGMainDisplayID()) != 0
+    }
+
+    var displays = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+    let listResult = CGGetOnlineDisplayList(displayCount, &displays, &displayCount)
+    guard listResult == .success else {
+        return CGDisplayIsActive(CGMainDisplayID()) != 0
+    }
+
+    return displays.prefix(Int(displayCount)).contains { CGDisplayIsActive($0) != 0 }
+}
+
+func isoTimestamp(_ date: Date) -> String {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter.string(from: date)
+}
+
 final class Daemon: NSObject, CocoaMQTTDelegate {
     private let config: AppConfig
     private let mqtt: CocoaMQTT
     private var volumeTimer: DispatchSourceTimer?
     private var batteryTimer: DispatchSourceTimer?
+    private var displayTimer: DispatchSourceTimer?
+    private var lastDisplayState: Bool?
+    private var lastDisplayChangedAt = Date()
 
     private var baseTopic: String {
         "\(config.topics.base)/\(config.computerName)"
@@ -139,9 +166,21 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
             mqtt.publish("\(baseTopic)/status/volume", withString: String(try currentVolume()), qos: .qos1, retained: true)
             mqtt.publish("\(baseTopic)/status/mute", withString: String(try isMuted()), qos: .qos1, retained: true)
             mqtt.publish("\(baseTopic)/status/battery", withString: String(try batteryPercent()), qos: .qos1, retained: true)
+            publishDisplayStatus()
         } catch {
             print("Status update error: \(error)")
         }
+    }
+
+    private func publishDisplayStatus() {
+        let displayOn = isDisplayOn()
+        if let lastDisplayState, lastDisplayState != displayOn {
+            lastDisplayChangedAt = Date()
+        }
+        lastDisplayState = displayOn
+
+        mqtt.publish("\(baseTopic)/status/display", withString: String(displayOn), qos: .qos1, retained: true)
+        mqtt.publish("\(baseTopic)/status/display_changed_at", withString: isoTimestamp(lastDisplayChangedAt), qos: .qos1, retained: true)
     }
 
     private func schedulePolling() {
@@ -171,6 +210,15 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
         }
         batteryTimer.resume()
         self.batteryTimer = batteryTimer
+
+        let displayTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        displayTimer.schedule(deadline: .now(), repeating: config.intervals.displaySeconds ?? 5)
+        displayTimer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.publishDisplayStatus()
+        }
+        displayTimer.resume()
+        self.displayTimer = displayTimer
     }
 
     private func subscribeCommands() {

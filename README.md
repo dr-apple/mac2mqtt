@@ -12,12 +12,16 @@ Modernisierte Swift-Version von `mac2mqtt` fuer aktuelle macOS-Versionen:
   - `status/volume`
   - `status/mute`
   - `status/battery`
+  - `status/display` (`true` = Monitor an, `false` = Monitor aus)
+  - `status/display_changed_at` (ISO-8601-Zeitstempel des letzten Monitor-Statuswechsels)
 - Reagiert auf:
   - `command/volume`
   - `command/mute`
   - `command/sleep`
   - `command/shutdown`
-  - `command/displaysleep`
+- `command/displaysleep`
+
+Damit kannst du z.B. unter `<base>/<computerName>/status/display` sehen, ob mindestens ein angeschlossener Monitor aktiv ist, und unter `<base>/<computerName>/status/display_changed_at`, wann dieser Zustand zuletzt gewechselt hat.
 
 Topic-Schema:
 
