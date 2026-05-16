@@ -1,7 +1,10 @@
 import AppKit
 import CocoaMQTT
 import CoreGraphics
+import Darwin
 import Foundation
+import IOKit
+import ObjectiveC
 import Yams
 
 struct AppConfig: Decodable {
@@ -22,6 +25,7 @@ struct AppConfig: Decodable {
         let volumeSeconds: TimeInterval
         let batterySeconds: TimeInterval
         let displaySeconds: TimeInterval?
+        let mediaSeconds: TimeInterval?
     }
 
     let computerName: String
@@ -32,6 +36,11 @@ struct AppConfig: Decodable {
 
 enum ShellError: Error {
     case failed(String)
+}
+
+func logMessage(_ message: String) {
+    print(message)
+    fflush(stdout)
 }
 
 @discardableResult
@@ -77,6 +86,165 @@ func setVolume(_ value: Int) throws {
 func setMuted(_ value: Bool) throws {
     let script = value ? "set volume with output muted" : "set volume without output muted"
     _ = try runProcess("/usr/bin/osascript", ["-e", script])
+}
+
+enum MediaPlaybackCommand {
+    case play
+    case pause
+    case toggle
+}
+
+extension MediaPlaybackCommand {
+    var mediaRemoteValue: Int32 {
+        switch self {
+        case .play:
+            return 0
+        case .pause:
+            return 1
+        case .toggle:
+            return 2
+        }
+    }
+}
+
+final class MediaRemote: @unchecked Sendable {
+    typealias IsPlayingBlock = @convention(block) (Bool) -> Void
+    typealias GetIsPlaying = @convention(c) (DispatchQueue, AnyObject) -> Void
+    typealias InfoBlock = @convention(block) (CFDictionary?) -> Void
+    typealias GetNowPlayingInfo = @convention(c) (DispatchQueue, AnyObject) -> Void
+    typealias SendCommand = @convention(c) (Int32, CFDictionary?) -> Void
+
+    static let shared = MediaRemote()
+
+    private let getIsPlaying: GetIsPlaying?
+    private let getNowPlayingInfo: GetNowPlayingInfo?
+    private let sendCommand: SendCommand?
+
+    private init() {
+        let framework = dlopen(
+            "/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote",
+            RTLD_NOW
+        )
+
+        if let symbol = framework.flatMap({ dlsym($0, "MRMediaRemoteGetNowPlayingApplicationIsPlaying") }) {
+            getIsPlaying = unsafeBitCast(symbol, to: GetIsPlaying.self)
+        } else {
+            getIsPlaying = nil
+        }
+
+        if let symbol = framework.flatMap({ dlsym($0, "MRMediaRemoteGetNowPlayingInfo") }) {
+            getNowPlayingInfo = unsafeBitCast(symbol, to: GetNowPlayingInfo.self)
+        } else {
+            getNowPlayingInfo = nil
+        }
+
+        if let symbol = framework.flatMap({ dlsym($0, "MRMediaRemoteSendCommand") }) {
+            sendCommand = unsafeBitCast(symbol, to: SendCommand.self)
+        } else {
+            sendCommand = nil
+        }
+    }
+
+    func isPlaying(timeout: TimeInterval = 1.0) -> Bool? {
+        let assertionPlaying = isMediaPlaybackActiveByAssertions()
+        if assertionPlaying == true {
+            return true
+        }
+
+        return isPlayingFromMediaRemote(timeout: timeout) ?? assertionPlaying
+    }
+
+    func isPlayingFromMediaRemote(timeout: TimeInterval = 1.0) -> Bool? {
+        let playbackRatePlaying = nowPlayingPlaybackRate(timeout: timeout).map { $0 > 0.01 }
+        let applicationPlaying = nowPlayingApplicationIsPlaying(timeout: timeout)
+
+        if playbackRatePlaying == nil && applicationPlaying == nil {
+            return nil
+        }
+
+        return (playbackRatePlaying == true) || (applicationPlaying == true)
+    }
+
+    private func nowPlayingApplicationIsPlaying(timeout: TimeInterval = 1.0) -> Bool? {
+        guard let getIsPlaying else { return nil }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: Bool?
+
+        let callback: IsPlayingBlock = { playing in
+            result = playing
+            semaphore.signal()
+        }
+        let callbackObject = unsafeBitCast(callback, to: AnyObject.self)
+        getIsPlaying(DispatchQueue.global(qos: .utility), callbackObject)
+
+        guard semaphore.wait(timeout: .now() + timeout) == .success else {
+            return nil
+        }
+        return result
+    }
+
+    func nowPlayingPlaybackRate(timeout: TimeInterval = 1.0) -> Double? {
+        guard let getNowPlayingInfo else { return nil }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: Double?
+
+        let callback: InfoBlock = { info in
+            guard let info else {
+                semaphore.signal()
+                return
+            }
+
+            let dict = info as NSDictionary
+            if let rate = dict["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? NSNumber {
+                result = rate.doubleValue
+            } else if let rate = dict["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double {
+                result = rate
+            } else if let rate = dict["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? String {
+                result = Double(rate)
+            }
+            semaphore.signal()
+        }
+
+        let callbackObject = unsafeBitCast(callback, to: AnyObject.self)
+        getNowPlayingInfo(DispatchQueue.global(qos: .utility), callbackObject)
+
+        guard semaphore.wait(timeout: .now() + timeout) == .success else {
+            return nil
+        }
+        return result
+    }
+
+    func send(_ command: MediaPlaybackCommand) -> Bool {
+        guard let sendCommand else { return false }
+        sendCommand(command.mediaRemoteValue, nil)
+        return true
+    }
+
+    private func isMediaPlaybackActiveByAssertions() -> Bool? {
+        guard let output = try? runProcess("/usr/bin/pmset", ["-g", "assertions"]) else {
+            return nil
+        }
+
+        let lowercased = output.lowercased()
+        return lowercased.contains("playing audio") ||
+            lowercased.contains("video wake lock") ||
+            lowercased.contains("resources: audio-out")
+    }
+}
+
+func parseMediaPlaybackCommand(_ payload: String) -> MediaPlaybackCommand? {
+    switch payload.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "play", "on", "true":
+        return .play
+    case "pause", "off", "false":
+        return .pause
+    case "toggle", "playpause", "play_pause":
+        return .toggle
+    default:
+        return nil
+    }
 }
 
 func batteryPercent() throws -> Int? {
@@ -204,6 +372,42 @@ func speak(_ text: String) throws {
     _ = try runProcess("/usr/bin/say", [text])
 }
 
+func speakWithMediaPauseAndMuteRestore(_ text: String) throws {
+    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+    let wasPlaying = MediaRemote.shared.isPlaying() == true
+    let wasMuted = (try? isMuted()) ?? false
+
+    if wasPlaying {
+        _ = MediaRemote.shared.send(.pause)
+        Thread.sleep(forTimeInterval: 0.25)
+    }
+    if wasMuted {
+        try? setMuted(false)
+        Thread.sleep(forTimeInterval: 0.1)
+    }
+
+    do {
+        try speak(text)
+    } catch {
+        if wasMuted {
+            try? setMuted(true)
+        }
+        if wasPlaying {
+            _ = MediaRemote.shared.send(.play)
+        }
+        throw error
+    }
+
+    if wasMuted {
+        try? setMuted(true)
+    }
+    if wasPlaying {
+        Thread.sleep(forTimeInterval: 0.25)
+        _ = MediaRemote.shared.send(.play)
+    }
+}
+
 func notificationParts(from payload: String) -> (title: String, message: String) {
     let fallbackTitle = "Mac2MQTT"
     let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -231,16 +435,28 @@ func showNotification(_ payload: String) throws {
 }
 
 func isSessionLocked() -> Bool {
-    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
-          let value = session["CGSSessionScreenIsLocked"] else {
+    let root = IORegistryEntryFromPath(kIOMainPortDefault, "IOService:/")
+    guard root != 0 else { return false }
+    defer { IOObjectRelease(root) }
+
+    guard let property = IORegistryEntryCreateCFProperty(
+        root,
+        "IOConsoleLocked" as CFString,
+        kCFAllocatorDefault,
+        0
+    )?.takeRetainedValue() else {
         return false
     }
 
-    if let locked = value as? Bool {
+    if let locked = property as? Bool {
         return locked
     }
-    if let locked = value as? NSNumber {
+    if let locked = property as? NSNumber {
         return locked.boolValue
+    }
+    if let locked = property as? String {
+        return locked.localizedCaseInsensitiveContains("yes") ||
+            locked.localizedCaseInsensitiveContains("true")
     }
     return false
 }
@@ -393,12 +609,19 @@ func isoTimestamp(_ date: Date) -> String {
     return formatter.string(from: date)
 }
 
-final class Daemon: NSObject, CocoaMQTTDelegate {
+final class Daemon: NSObject, CocoaMQTTDelegate, @unchecked Sendable {
     private let config: AppConfig
     private let mqtt: CocoaMQTT
+    private let workQueue = DispatchQueue(label: "com.example.mac2mqttd.status", qos: .utility)
+    private var lockedState = isSessionLocked()
     private var volumeTimer: DispatchSourceTimer?
     private var batteryTimer: DispatchSourceTimer?
     private var displayTimer: DispatchSourceTimer?
+    private var mediaTimer: DispatchSourceTimer?
+    private var lastMediaPlayingState: Bool?
+    private var mediaOverrideUntil: Date?
+    private var mediaOverrideState: Bool?
+    private var suppressAssertionPlayingUntil: Date?
     private var lastDisplayState: Bool?
     private var lastDisplayChangedAt = Date()
     private var clearedBatteryStatus = false
@@ -423,92 +646,38 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
         mqtt.delegate = self
         mqtt.willMessage = CocoaMQTTMessage(topic: "\(baseTopic)/status/alive",
                                             string: "false",
-                                            qos: .qos1,
+                                            qos: .qos0,
                                             retained: true)
     }
 
     func start() {
-        print("Starting mac2mqttd ...")
+        setbuf(stdout, nil)
+        registerLockNotifications()
+        logMessage("Starting mac2mqttd ...")
         _ = mqtt.connect()
+    }
+
+    deinit {
+        DistributedNotificationCenter.default().removeObserver(self)
     }
 
     private func publishStatus() {
         do {
+            publishStatusTopic("alive", "true")
             publishStatusTopic("volume", String(try currentVolume()))
             publishStatusTopic("mute", String(try isMuted()))
             clearRemovedStatusTopics()
             publishBatteryStatus()
             publishDisplayStatus()
             publishLockStatus()
+            publishMediaPlaybackStatus()
         } catch {
-            print("Status update error: \(error)")
+            logMessage("Status update error: \(error)")
         }
     }
 
     private func publishStatusTopic(_ suffix: String, _ value: String) {
         mqtt.publish("\(baseTopic)/status/\(suffix)", withString: value, qos: .qos0, retained: true)
-    }
-
-    private func publishDiscoveryTopic(_ component: String, _ objectID: String, _ payload: [String: Any]) {
-        guard JSONSerialization.isValidJSONObject(payload),
-              let data = try? JSONSerialization.data(withJSONObject: payload),
-              let json = String(data: data, encoding: .utf8) else {
-            return
-        }
-
-        mqtt.publish("homeassistant/\(component)/\(config.computerName)/\(objectID)/config",
-                     withString: json,
-                     qos: .qos0,
-                     retained: true)
-    }
-
-    private func clearDiscoveryTopic(_ component: String, _ objectID: String) {
-        let message = CocoaMQTTMessage(topic: "homeassistant/\(component)/\(config.computerName)/\(objectID)/config",
-                                      payload: [],
-                                      qos: .qos0,
-                                      retained: true)
-        mqtt.publish(message)
-    }
-
-    private func publishHomeAssistantDiscovery() {
-        let device: [String: Any] = [
-            "identifiers": ["mac2mqtt_\(config.computerName)"],
-            "name": config.computerName,
-            "manufacturer": "mac2mqtt",
-            "model": "Mac"
-        ]
-
-        publishDiscoveryTopic("select", "app", [
-            "name": "App",
-            "unique_id": "mac2mqtt_\(config.computerName)_app",
-            "command_topic": "\(baseTopic)/command/app",
-            "availability_topic": "\(baseTopic)/status/alive",
-            "payload_available": "true",
-            "payload_not_available": "false",
-            "optimistic": true,
-            "icon": "mdi:application",
-            "options": appNames(),
-            "device": device
-        ])
-
-        publishDiscoveryTopic("select", "screensaver", [
-            "name": "Screensaver",
-            "unique_id": "mac2mqtt_\(config.computerName)_screensaver",
-            "command_topic": "\(baseTopic)/command/screensaver",
-            "availability_topic": "\(baseTopic)/status/alive",
-            "payload_available": "true",
-            "payload_not_available": "false",
-            "optimistic": true,
-            "icon": "mdi:monitor-screenshot",
-            "options": screenSaverNames(),
-            "device": device
-        ])
-
-        clearDiscoveryTopic("sensor", "apps")
-        if !hasBattery() {
-            clearDiscoveryTopic("sensor", "battery")
-            clearDiscoveryTopic("sensor", "power_source")
-        }
     }
 
     private func clearRetainedStatusTopic(_ suffix: String) {
@@ -526,9 +695,11 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
     private func publishBatteryStatus() {
         do {
             guard hasBattery() else {
-                clearRetainedStatusTopic("battery")
-                clearRetainedStatusTopic("power_source")
-                clearedBatteryStatus = true
+                if !clearedBatteryStatus {
+                    clearRetainedStatusTopic("battery")
+                    clearRetainedStatusTopic("power_source")
+                    clearedBatteryStatus = true
+                }
                 return
             }
 
@@ -538,12 +709,56 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
                 publishStatusTopic("power_source", try powerSource() ?? "")
             }
         } catch {
-            print("Battery status error: \(error)")
+            logMessage("Battery status error: \(error)")
         }
     }
 
     private func publishLockStatus() {
-        publishStatusTopic("locked", String(isSessionLocked()))
+        publishStatusTopic("locked", String(lockedState))
+    }
+
+    private func publishMediaPlaybackStatus() {
+        guard let isPlaying = currentMediaPlayingState() else { return }
+        guard lastMediaPlayingState != isPlaying else { return }
+        lastMediaPlayingState = isPlaying
+        publishStatusTopic("media_playing", String(isPlaying))
+    }
+
+    private func publishMediaPlaybackStatus(force: Bool) {
+        guard let isPlaying = currentMediaPlayingState() else { return }
+        if !force && lastMediaPlayingState == isPlaying { return }
+        lastMediaPlayingState = isPlaying
+        publishStatusTopic("media_playing", String(isPlaying))
+    }
+
+    private func currentMediaPlayingState() -> Bool? {
+        if let mediaOverrideUntil, mediaOverrideUntil > Date(), let mediaOverrideState {
+            return mediaOverrideState
+        }
+
+        mediaOverrideUntil = nil
+        mediaOverrideState = nil
+
+        suppressAssertionPlayingUntil = nil
+        return MediaRemote.shared.isPlaying()
+    }
+
+    private func overrideMediaPlayingState(_ isPlaying: Bool, duration: TimeInterval = 2.5) {
+        mediaOverrideState = isPlaying
+        mediaOverrideUntil = Date().addingTimeInterval(duration)
+        suppressAssertionPlayingUntil = isPlaying ? nil : Date().addingTimeInterval(duration)
+        publishMediaPlaybackStatus(force: true)
+    }
+
+    private func expectedMediaState(after command: MediaPlaybackCommand) -> Bool? {
+        switch command {
+        case .play:
+            return true
+        case .pause:
+            return false
+        case .toggle:
+            return lastMediaPlayingState.map { !$0 }
+        }
     }
 
     private func publishDisplayStatus() {
@@ -560,7 +775,7 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
     private func schedulePolling() {
         cancelPolling()
 
-        let volumeTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        let volumeTimer = DispatchSource.makeTimerSource(queue: workQueue)
         volumeTimer.schedule(deadline: .now(), repeating: config.intervals.volumeSeconds)
         volumeTimer.setEventHandler { [weak self] in
             guard let self else { return }
@@ -568,13 +783,13 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
                 self.publishStatusTopic("volume", String(try currentVolume()))
                 self.publishStatusTopic("mute", String(try isMuted()))
             } catch {
-                print("Volume poll error: \(error)")
+                logMessage("Volume poll error: \(error)")
             }
         }
         volumeTimer.resume()
         self.volumeTimer = volumeTimer
 
-        let batteryTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        let batteryTimer = DispatchSource.makeTimerSource(queue: workQueue)
         batteryTimer.schedule(deadline: .now(), repeating: config.intervals.batterySeconds)
         batteryTimer.setEventHandler { [weak self] in
             guard let self else { return }
@@ -583,15 +798,22 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
         batteryTimer.resume()
         self.batteryTimer = batteryTimer
 
-        let displayTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        let displayTimer = DispatchSource.makeTimerSource(queue: workQueue)
         displayTimer.schedule(deadline: .now(), repeating: config.intervals.displaySeconds ?? 5)
         displayTimer.setEventHandler { [weak self] in
             guard let self else { return }
             self.publishDisplayStatus()
-            self.publishLockStatus()
         }
         displayTimer.resume()
         self.displayTimer = displayTimer
+
+        let mediaTimer = DispatchSource.makeTimerSource(queue: workQueue)
+        mediaTimer.schedule(deadline: .now(), repeating: config.intervals.mediaSeconds ?? 1)
+        mediaTimer.setEventHandler { [weak self] in
+            self?.publishMediaPlaybackStatus()
+        }
+        mediaTimer.resume()
+        self.mediaTimer = mediaTimer
     }
 
     private func cancelPolling() {
@@ -601,10 +823,42 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
         batteryTimer = nil
         displayTimer?.cancel()
         displayTimer = nil
+        mediaTimer?.cancel()
+        mediaTimer = nil
     }
 
     private func subscribeCommands() {
-        mqtt.subscribe("\(baseTopic)/command/#", qos: .qos1)
+        mqtt.subscribe("\(baseTopic)/command/#", qos: .qos0)
+    }
+
+    private func registerLockNotifications() {
+        let center = DistributedNotificationCenter.default()
+        center.addObserver(self,
+                           selector: #selector(screenDidLock),
+                           name: Notification.Name("com.apple.screenIsLocked"),
+                           object: nil)
+        center.addObserver(self,
+                           selector: #selector(screenDidUnlock),
+                           name: Notification.Name("com.apple.screenIsUnlocked"),
+                           object: nil)
+    }
+
+    @objc private func screenDidLock() {
+        workQueue.async { [weak self] in
+            guard let self else { return }
+            self.lockedState = true
+            self.publishLockStatus()
+            logMessage("Screen locked")
+        }
+    }
+
+    @objc private func screenDidUnlock() {
+        workQueue.async { [weak self] in
+            guard let self else { return }
+            self.lockedState = false
+            self.publishLockStatus()
+            logMessage("Screen unlocked")
+        }
     }
 
     private func handleCommand(topic: String, payload: String) {
@@ -630,7 +884,7 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
                 try? displayWake()
             }
         case "\(baseTopic)/command/say":
-            try? speak(payload)
+            try? speakWithMediaPauseAndMuteRestore(payload)
         case "\(baseTopic)/command/notification":
             try? showNotification(payload)
         case "\(baseTopic)/command/screensaver":
@@ -642,6 +896,28 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
             }
         case "\(baseTopic)/command/app":
             try? launchOrActivateApp(payload)
+        case "\(baseTopic)/command/media_playback":
+            if let command = parseMediaPlaybackCommand(payload) {
+                let expectedState = expectedMediaState(after: command)
+                _ = MediaRemote.shared.send(command)
+                if let expectedState {
+                    overrideMediaPlayingState(expectedState)
+                } else {
+                    workQueue.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                        self?.publishMediaPlaybackStatus(force: true)
+                    }
+                }
+            }
+        case "\(baseTopic)/command/play_pause":
+            let expectedState = expectedMediaState(after: .toggle)
+            _ = MediaRemote.shared.send(.toggle)
+            if let expectedState {
+                overrideMediaPlayingState(expectedState)
+            } else {
+                workQueue.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                    self?.publishMediaPlaybackStatus(force: true)
+                }
+            }
         default:
             break
         }
@@ -651,15 +927,16 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
 
     func mqtt(_ mqtt: CocoaMQTT, didConnectAck ack: CocoaMQTTConnAck) {
         guard ack == .accept else {
-            print("MQTT connect failed: \(ack)")
+            logMessage("MQTT connect failed: \(ack)")
             return
         }
-        print("Connected to MQTT")
-        mqtt.publish("\(baseTopic)/status/alive", withString: "true", qos: .qos1, retained: true)
-        publishHomeAssistantDiscovery()
+        logMessage("Connected to MQTT")
+        mqtt.publish("\(baseTopic)/status/alive", withString: "true", qos: .qos0, retained: true)
         subscribeCommands()
-        publishStatus()
-        schedulePolling()
+        workQueue.async { [weak self] in
+            self?.publishStatus()
+            self?.schedulePolling()
+        }
     }
 
     func mqtt(_ mqtt: CocoaMQTT, didPublishMessage message: CocoaMQTTMessage, id: UInt16) {}
@@ -669,7 +946,7 @@ final class Daemon: NSObject, CocoaMQTTDelegate {
     func mqttDidPing(_ mqtt: CocoaMQTT) {}
     func mqttDidReceivePong(_ mqtt: CocoaMQTT) {}
     func mqttDidDisconnect(_ mqtt: CocoaMQTT, withError err: Error?) {
-        print("Disconnected: \(err?.localizedDescription ?? "none")")
+        logMessage("Disconnected: \(err?.localizedDescription ?? "none")")
         cancelPolling()
     }
     func mqtt(_ mqtt: CocoaMQTT, didStateChangeTo state: CocoaMQTTConnState) {}

@@ -20,6 +20,7 @@ struct AppConfig: Codable {
         var volumeSeconds: TimeInterval
         var batterySeconds: TimeInterval
         var displaySeconds: TimeInterval?
+        var mediaSeconds: TimeInterval?
     }
 
     var computerName: String
@@ -112,7 +113,7 @@ func defaultConfig() -> AppConfig {
         computerName: Host.current().localizedName?.replacingOccurrences(of: " ", with: "-").lowercased() ?? "my-macbook",
         mqtt: .init(host: "127.0.0.1", port: 1883, username: nil, password: nil, useTLS: false, keepAliveSeconds: 30),
         topics: .init(base: "mac2mqtt"),
-        intervals: .init(volumeSeconds: 2, batterySeconds: 60, displaySeconds: 5)
+        intervals: .init(volumeSeconds: 2, batterySeconds: 60, displaySeconds: 5, mediaSeconds: 1)
     )
 }
 
@@ -365,6 +366,7 @@ final class SettingsViewController: NSViewController {
     private let volumeInterval = NSTextField()
     private let batteryInterval = NSTextField()
     private let displayInterval = NSTextField()
+    private let mediaInterval = NSTextField()
 
     init(config: AppConfig, onSave: @escaping (AppConfig) -> Void) {
         self.config = config
@@ -390,7 +392,8 @@ final class SettingsViewController: NSViewController {
             [label("Topic Base"), topicBase],
             [label("Volume Intervall (s)"), volumeInterval],
             [label("Battery Intervall (s)"), batteryInterval],
-            [label("Display Intervall (s)"), displayInterval]
+            [label("Display Intervall (s)"), displayInterval],
+            [label("Media Intervall (s)"), mediaInterval]
         ])
         grid.translatesAutoresizingMaskIntoConstraints = false
         grid.rowSpacing = 10
@@ -438,6 +441,7 @@ final class SettingsViewController: NSViewController {
         volumeInterval.stringValue = String(Int(config.intervals.volumeSeconds))
         batteryInterval.stringValue = String(Int(config.intervals.batterySeconds))
         displayInterval.stringValue = String(Int(config.intervals.displaySeconds ?? 5))
+        mediaInterval.stringValue = String(Int(config.intervals.mediaSeconds ?? 1))
         mqttTls.state = config.mqtt.useTLS ? .on : .off
 
     }
@@ -453,6 +457,7 @@ final class SettingsViewController: NSViewController {
         config.intervals.volumeSeconds = TimeInterval(Int(volumeInterval.stringValue) ?? 2)
         config.intervals.batterySeconds = TimeInterval(Int(batteryInterval.stringValue) ?? 60)
         config.intervals.displaySeconds = TimeInterval(Int(displayInterval.stringValue) ?? 5)
+        config.intervals.mediaSeconds = TimeInterval(Int(mediaInterval.stringValue) ?? 1)
         onSave(config)
     }
 }

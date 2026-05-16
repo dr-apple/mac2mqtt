@@ -16,6 +16,7 @@ Modernisierte Swift-Version von `mac2mqtt` fuer aktuelle macOS-Versionen:
   - `status/display` (`true` = Monitor an, `false` = Monitor aus)
   - `status/display_changed_at` (ISO-8601-Zeitstempel des letzten Monitor-Statuswechsels)
   - `status/locked` (`true` = Benutzer-Session ist gesperrt)
+  - `status/media_playing` (`true` = Wiedergabe laeuft, `false` = pausiert/gestoppt)
 - Reagiert auf:
   - `command/volume`
   - `command/mute`
@@ -24,15 +25,17 @@ Modernisierte Swift-Version von `mac2mqtt` fuer aktuelle macOS-Versionen:
   - `command/displaysleep`
   - `command/displaywake`
   - `command/display` (`sleep` oder `wake`)
-  - `command/say` (Payload wird per macOS-Sprachausgabe vorgelesen)
+  - `command/say` (Payload wird per macOS-Sprachausgabe vorgelesen; laufende Wiedergabe und Mute werden vorher pausiert/geaendert und danach wiederhergestellt)
   - `command/notification` (Payload als Text oder JSON: `{"title":"Titel","message":"Text"}`; erscheint immer als Vordergrund-Dialog)
   - `command/screensaver` (Name eines nachinstallierten `.saver`)
   - `command/app` (App per Payload als Name/Pfad/Bundle-ID starten oder aktivieren)
+  - `command/media_playback` (`play`, `pause` oder `toggle`)
+  - `command/play_pause` (Alias fuer `toggle`)
 
 Damit kannst du z.B. unter `<base>/<computerName>/status/display` sehen, ob mindestens ein angeschlossener Monitor aktiv ist, und unter `<base>/<computerName>/status/display_changed_at`, wann dieser Zustand zuletzt gewechselt hat.
 Auf Macs ohne internen Akku werden `status/battery` und `status/power_source` nicht veroeffentlicht; vorhandene retained Werte werden einmal geloescht.
 Apps koennen per Payload als Name (`Safari`), Bundle-ID (`com.apple.Safari`), Pfad (`/Applications/Safari.app`) oder JSON (`{"name":"Safari"}`) gestartet bzw. aktiviert werden.
-Home Assistant bekommt per MQTT Discovery je eine `select`-Entitaet fuer `App` und `Screensaver`. Die Optionen werden aus installierten Apps bzw. nachinstallierten Bildschirmschonern aus `~/Library/Screen Savers` und `/Library/Screen Savers` erzeugt.
+Der Media-Status hat ein eigenes Polling-Intervall (`intervals.mediaSeconds`, Standard: `1`), damit Play/Pause schneller erkannt wird als Display- oder Battery-Status.
 
 Topic-Schema:
 
