@@ -48,6 +48,10 @@ intervals:
 Die Menüleisten-App schreibt diese Datei für dich; von Hand bearbeiten ist nur nötig, wenn du ohne App arbeitest.
 
 
+![Der Mac als Gerät in Home Assistant (über die HACS-Integration)](docs/images/ha-device-page.png)
+
+*Echter Screenshot aus einer Home-Assistant-Installation (persönliche Daten ersetzt).*
+
 ## Funktionen
 
 - Publiziert:

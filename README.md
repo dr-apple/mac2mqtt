@@ -22,6 +22,10 @@ A modernised Swift version of [`mac2mqtt`](https://github.com/bessarabov/mac2mqt
 
 ![Example: watching the status topics and sending commands](docs/images/mqtt-topics.svg)
 
+![The Mac as a device in Home Assistant (via the HACS integration)](docs/images/ha-device-page.png)
+
+*Real screenshot from a Home Assistant installation (German UI, personal data replaced).*
+
 ## Features
 
 Publishes:
