@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 342" width="760" height="342" font-family="SFMono-Regular,Menlo,Consolas,monospace">
+<rect width="760" height="342" rx="12" fill="#1e1e1e"/>
+<circle cx="22" cy="20" r="6" fill="#ff5f56"/><circle cx="42" cy="20" r="6" fill="#ffbd2e"/><circle cx="62" cy="20" r="6" fill="#27c93f"/>
+<text x="380.0" y="25" text-anchor="middle" font-size="13" fill="#9da5b4" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">mosquitto_sub -v -t &#x27;mac2mqtt/#&#x27;</text>
+<text x="20" y="62" font-size="14" fill="#7ee787" xml:space="preserve">$ mosquitto_sub -h broker -v -t &#x27;mac2mqtt/my-macbook/#&#x27;</text>
+<text x="20" y="84" font-size="14" fill="#e6edf3" xml:space="preserve">mac2mqtt/my-macbook/status/alive true</text>
+<text x="20" y="106" font-size="14" fill="#e6edf3" xml:space="preserve">mac2mqtt/my-macbook/status/volume 35</text>
+<text x="20" y="128" font-size="14" fill="#e6edf3" xml:space="preserve">mac2mqtt/my-macbook/status/mute false</text>
+<text x="20" y="150" font-size="14" fill="#e6edf3" xml:space="preserve">mac2mqtt/my-macbook/status/battery 87</text>
+<text x="20" y="172" font-size="14" fill="#e6edf3" xml:space="preserve">mac2mqtt/my-macbook/status/power_source ac_power</text>
+<text x="20" y="194" font-size="14" fill="#e6edf3" xml:space="preserve">mac2mqtt/my-macbook/status/display true</text>
+<text x="20" y="216" font-size="14" fill="#e6edf3" xml:space="preserve">mac2mqtt/my-macbook/status/locked false</text>
+<text x="20" y="238" font-size="14" fill="#e6edf3" xml:space="preserve">mac2mqtt/my-macbook/status/media_playing true</text>
+<text x="20" y="260" font-size="14" fill="#e6edf3" xml:space="preserve"></text>
+<text x="20" y="282" font-size="14" fill="#7ee787" xml:space="preserve">$ mosquitto_pub -h broker -t mac2mqtt/my-macbook/command/volume -m 20</text>
+<text x="20" y="304" font-size="14" fill="#7ee787" xml:space="preserve">$ mosquitto_pub -h broker -t mac2mqtt/my-macbook/command/say -m &#x27;Dinner is ready&#x27;</text>
+</svg>

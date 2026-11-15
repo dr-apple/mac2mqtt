@@ -1,169 +1,204 @@
-# mac2mqtt-modern (`mac2mqttd` + `mac2mqtt-ui`)
+# mac2mqtt (`mac2mqttd` + `mac2mqtt-ui`)
 
-Modernisierte Swift-Version von `mac2mqtt` fuer aktuelle macOS-Versionen:
+**English** · [Deutsch](README.de.md)
 
-- `mac2mqttd` = Daemon (MQTT + macOS Steuerung)
-- `mac2mqtt-ui` = Menu-Bar App (Start/Stop/Restart, Settings, Logs)
+<img src="dist/icon-1024.png" alt="Mac2MQTT app icon" width="96" align="right">
+
+![mac2mqtt](docs/images/banner.svg)
+
+A modernised Swift version of [`mac2mqtt`](https://github.com/bessarabov/mac2mqtt) for current macOS versions. Your Mac reports its state via MQTT and accepts commands – a perfect fit for Home Assistant.
+
+- `mac2mqttd` = daemon (MQTT + macOS control)
+- `mac2mqtt-ui` = menu bar app (start/stop/restart, settings, logs)
+
+![How it works: menu bar app → mac2mqttd → MQTT → Home Assistant](docs/images/how-it-works.svg)
+
+## Quick start
+
+1. Download the latest version from [Releases](https://github.com/dr-apple/mac2mqtt/releases) or build it yourself (see below) and drag `Mac2MQTT.app` to *Applications*.
+2. Launch it → menu bar icon → **Settings**: enter MQTT host, user, password and computer name.
+3. **Start Service** – done. The topics appear in MQTT under `mac2mqtt/<computerName>/…`.
+4. In Home Assistant install the [Mac2MQTT for Home Assistant](https://github.com/dr-apple/mac2mqtt-for-home-assisatant) integration – you get one device per Mac with all entities.
+
+![Example: watching the status topics and sending commands](docs/images/mqtt-topics.svg)
+
+![The Mac as a device in Home Assistant (via the HACS integration)](docs/images/ha-device-page.png)
+
+*Real screenshot from a Home Assistant installation (German UI, personal data replaced).*
 
 ## Features
 
-- Publiziert:
-  - `status/alive`
-  - `status/volume`
-  - `status/mute`
-  - `status/battery` (nur bei Macs mit internem Akku)
-  - `status/power_source` (`ac_power` oder `battery`, nur bei Macs mit internem Akku)
-  - `status/display` (`true` = Monitor an, `false` = Monitor aus)
-  - `status/display_changed_at` (ISO-8601-Zeitstempel des letzten Monitor-Statuswechsels)
-  - `status/locked` (`true` = Benutzer-Session ist gesperrt)
-  - `status/media_playing` (`true` = Wiedergabe laeuft, `false` = pausiert/gestoppt)
-- Reagiert auf:
-  - `command/volume`
-  - `command/mute`
-  - `command/sleep`
-  - `command/shutdown`
-  - `command/displaysleep`
-  - `command/displaywake`
-  - `command/display` (`sleep` oder `wake`)
-  - `command/say` (Payload wird per macOS-Sprachausgabe vorgelesen; laufende Wiedergabe und Mute werden vorher pausiert/geaendert und danach wiederhergestellt)
-  - `command/notification` (Payload als Text oder JSON: `{"title":"Titel","message":"Text"}`; erscheint immer als Vordergrund-Dialog)
-  - `command/screensaver` (Name eines nachinstallierten `.saver`)
-  - `command/app` (App per Payload als Name/Pfad/Bundle-ID starten oder aktivieren)
-  - `command/media_playback` (`play`, `pause` oder `toggle`)
-  - `command/play_pause` (Alias fuer `toggle`)
+Publishes:
 
-Damit kannst du z.B. unter `<base>/<computerName>/status/display` sehen, ob mindestens ein angeschlossener Monitor aktiv ist, und unter `<base>/<computerName>/status/display_changed_at`, wann dieser Zustand zuletzt gewechselt hat.
-Auf Macs ohne internen Akku werden `status/battery` und `status/power_source` nicht veroeffentlicht; vorhandene retained Werte werden einmal geloescht.
-Apps koennen per Payload als Name (`Safari`), Bundle-ID (`com.apple.Safari`), Pfad (`/Applications/Safari.app`) oder JSON (`{"name":"Safari"}`) gestartet bzw. aktiviert werden.
-Der Media-Status hat ein eigenes Polling-Intervall (`intervals.mediaSeconds`, Standard: `1`), damit Play/Pause schneller erkannt wird als Display- oder Battery-Status.
+- `status/alive`
+- `status/volume`
+- `status/mute`
+- `status/battery` (only on Macs with an internal battery)
+- `status/power_source` (`ac_power` or `battery`, only on Macs with an internal battery)
+- `status/display` (`true` = monitor on, `false` = monitor off)
+- `status/display_changed_at` (ISO-8601 timestamp of the last monitor state change)
+- `status/locked` (`true` = user session is locked)
+- `status/media_playing` (`true` = playing, `false` = paused/stopped)
 
-Topic-Schema:
+Reacts to:
 
-`<base>/<computerName>/status/...` und `<base>/<computerName>/command/...`
+- `command/volume`
+- `command/mute`
+- `command/sleep`
+- `command/shutdown`
+- `command/displaysleep`
+- `command/displaywake`
+- `command/display` (`sleep` or `wake`)
+- `command/say` (payload is spoken with macOS text-to-speech; playback and mute are paused/changed before and restored afterwards)
+- `command/notification` (payload as text or JSON: `{"title":"Title","message":"Text"}`; always shown as a foreground dialog)
+- `command/screensaver` (name of an installed `.saver`)
+- `command/app` (launch or activate an app by name/path/bundle ID)
+- `command/media_playback` (`play`, `pause` or `toggle`)
+- `command/play_pause` (alias for `toggle`)
 
-## Einfach als .app (Drag & Drop)
+For example, `<base>/<computerName>/status/display` tells you whether at least one connected monitor is active, and `<base>/<computerName>/status/display_changed_at` when that last changed.
+On Macs without an internal battery, `status/battery` and `status/power_source` are not published; existing retained values are cleared once.
+Apps can be launched/activated by name (`Safari`), bundle ID (`com.apple.Safari`), path (`/Applications/Safari.app`) or JSON (`{"name":"Safari"}`).
+Media state has its own polling interval (`intervals.mediaSeconds`, default `1`) so play/pause is detected faster than display or battery state.
 
-Genau fuer deinen Use Case:
+Topic scheme: `<base>/<computerName>/status/...` and `<base>/<computerName>/command/...`
+
+## Configuration (`~/mac2mqtt/mac2mqtt.yaml`)
+
+```yaml
+computerName: "my-macbook"
+
+mqtt:
+  host: "192.168.1.10"
+  port: 1883
+  username: "mac2mqtt"
+  password: "secret"
+  useTLS: false
+  keepAliveSeconds: 30
+
+topics:
+  base: "mac2mqtt"
+
+intervals:
+  volumeSeconds: 2
+  batterySeconds: 60
+  displaySeconds: 5
+  mediaSeconds: 1
+```
+
+The menu bar app writes this file for you; you only need to edit it by hand when running without the app.
+
+## Build as a drag & drop .app
 
 ```bash
-cd /Users/USERNAME/mac2mqtt-modern
+git clone https://github.com/dr-apple/mac2mqtt
+cd mac2mqtt
 ./build-app.sh
 ```
 
-Danach liegt die App hier:
+The app is then at `dist/Mac2MQTT.app` – drag it to *Applications*. The icon is set automatically.
 
-`/Users/USERNAME/mac2mqtt-modern/dist/Mac2MQTT.app`
+On the first **Start Service** in the menu bar the app does everything itself:
 
-Die App dann einfach nach `Programme` ziehen.
-Das Finder-/Remote-Symbol wird dabei automatisch als App-Icon gesetzt.
+- installs `mac2mqttd` to `~/mac2mqtt/`
+- creates `~/mac2mqtt/mac2mqtt.yaml` (if missing)
+- creates and starts the `launchd` LaunchAgent
 
-Beim ersten `Start Service` in der Menu-Bar macht die App alles selbst:
-
-- installiert `mac2mqttd` nach `~/mac2mqtt/`
-- legt `~/mac2mqtt/mac2mqtt.yaml` an (falls nicht vorhanden)
-- erzeugt und startet den `launchd` LaunchAgent
-
-## Build (Entwicklung)
+## Build (development)
 
 ```bash
-cd /Users/USERNAME/mac2mqtt-modern
 swift build -c release
 ```
 
-Binaries liegen danach unter:
+Binaries are then in `./.build/release/mac2mqttd` and `./.build/release/mac2mqtt-ui`.
 
-- `./.build/release/mac2mqttd`
-- `./.build/release/mac2mqtt-ui`
+## Manual setup without the app
 
-## Setup
+1. Create a working folder: `mkdir -p ~/mac2mqtt`
+2. Copy daemon and config:
 
-1. Arbeitsordner anlegen:
+   ```bash
+   cp ./.build/release/mac2mqttd ~/mac2mqtt/
+   cp ./mac2mqtt.yaml.example ~/mac2mqtt/mac2mqtt.yaml
+   chmod +x ~/mac2mqtt/mac2mqttd
+   ```
+
+3. Edit `mac2mqtt.yaml`.
+
+### Run as a daemon (launchd)
+
+For per-user background services, a `LaunchAgent` is the modern and safe way.
 
 ```bash
-mkdir -p /Users/USERNAME/mac2mqtt
+cp ./com.example.mac2mqttd.plist ~/Library/LaunchAgents/com.example.mac2mqttd.plist
 ```
 
-2. Daemon und Config kopieren:
+Replace `USERNAME` in the plist, then load it:
 
 ```bash
-cp ./.build/release/mac2mqttd /Users/USERNAME/mac2mqtt/
-cp ./mac2mqtt.yaml.example /Users/USERNAME/mac2mqtt/mac2mqtt.yaml
-chmod +x /Users/USERNAME/mac2mqtt/mac2mqttd
-```
-
-3. `mac2mqtt.yaml` anpassen.
-
-## Als Daemon starten (launchd)
-
-Hinweis: Fuer User-Hintergrunddienste ist `LaunchAgents` der moderne und sichere Weg.
-
-```bash
-cp ./com.example.mac2mqttd.plist /Users/USERNAME/Library/LaunchAgents/com.example.mac2mqttd.plist
-```
-
-Dann in der plist `USERNAME` ersetzen und laden:
-
-```bash
-launchctl bootstrap gui/$(id -u) /Users/USERNAME/Library/LaunchAgents/com.example.mac2mqttd.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.mac2mqttd.plist
 launchctl enable gui/$(id -u)/com.example.mac2mqttd
 launchctl kickstart -k gui/$(id -u)/com.example.mac2mqttd
 ```
 
-Stoppen:
+Stop:
 
 ```bash
 launchctl bootout gui/$(id -u)/com.example.mac2mqttd
 ```
 
-## Testlauf ohne launchd
+### Test run without launchd
 
 ```bash
-/Users/USERNAME/mac2mqtt/mac2mqttd --config /Users/USERNAME/mac2mqtt/mac2mqtt.yaml
+~/mac2mqtt/mac2mqttd --config ~/mac2mqtt/mac2mqtt.yaml
 ```
 
-## Menu-Bar App starten (ohne Bundle)
+### Menu bar app without a bundle
 
-Die UI verwaltet `launchd` fuer dich und schreibt Config/Plist automatisch an die richtigen Stellen.
+The UI manages `launchd` for you and writes config/plist to the right places.
 
 ```bash
-cd /Users/USERNAME/mac2mqtt-modern
 ./.build/release/mac2mqtt-ui
 ```
 
-Dann in der Menu-Bar:
+In the menu bar:
 
-- `Settings` fuer MQTT-Host, Topics und Poll-Intervalle
+- `Settings` for MQTT host, topics and poll intervals
 - `Start Service` / `Stop Service` / `Restart Service`
-- `Logs` fuer stdout/stderr vom Daemon
-
-## Optional: UI als .app Bundle bauen
-
-Wenn du die UI als klickbare App haben willst:
-
-```bash
-mkdir -p Mac2MQTTUI.app/Contents/MacOS
-cp ./.build/release/mac2mqtt-ui Mac2MQTTUI.app/Contents/MacOS/mac2mqtt-ui
-cat > Mac2MQTTUI.app/Contents/Info.plist << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleExecutable</key>
-  <string>mac2mqtt-ui</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.example.mac2mqtt-ui</string>
-  <key>CFBundleName</key>
-  <string>Mac2MQTTUI</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>LSUIElement</key>
-  <true/>
-</dict>
-</plist>
-EOF
-open ./Mac2MQTTUI.app
-```
+- `Logs` for the daemon's stdout/stderr
 
 ## Home Assistant
 
-Die MQTT-Topics sind bewusst kompatibel zur bisherigen `mac2mqtt`-Logik gehalten, damit bestehende Automationen weiter funktionieren.
+The MQTT topics are deliberately compatible with the original `mac2mqtt`, so existing automations keep working. The most convenient way is the HACS integration [mac2mqtt-for-home-assisatant](https://github.com/dr-apple/mac2mqtt-for-home-assisatant).
+
+Without the integration, e.g. a plain MQTT sensor:
+
+```yaml
+mqtt:
+  binary_sensor:
+    - name: MacBook locked
+      state_topic: mac2mqtt/my-macbook/status/locked
+      payload_on: "true"
+      payload_off: "false"
+```
+
+And a command from an automation:
+
+```yaml
+action: mqtt.publish
+data:
+  topic: mac2mqtt/my-macbook/command/notification
+  payload: '{"title":"Front door","message":"Someone rang the bell"}'
+```
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| No topics in the broker | Open **Logs** in the menu bar – usually a wrong host or credentials. |
+| Volume/media don't react | macOS asks for Automation/Accessibility permissions the first time – allow them. |
+| Service doesn't start after reboot | Check `launchctl print gui/$(id -u)/com.example.mac2mqttd` or press **Start Service** in the app again. |
+
+## License
+
+MIT – see [LICENSE](LICENSE).

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#546e7a"/><stop offset="1" stop-color="#1c2541"/></linearGradient></defs>
+<rect width="1200" height="300" rx="24" fill="url(#g)"/>
+<circle cx="1040" cy="150" r="190" fill="#fff" fill-opacity="0.06"/><circle cx="1040" cy="150" r="120" fill="#fff" fill-opacity="0.08"/>
+<text x="1040" y="190" text-anchor="middle" font-size="120" fill="#fff" fill-opacity="0.9">⌘</text>
+<text x="80" y="118" font-size="54" font-weight="700" fill="#fff">mac2mqtt</text>
+<text x="80" y="168" font-size="24" fill="#fff" fill-opacity="0.88">Modern Swift daemon + menu bar app that puts your Mac on MQTT</text>
+<rect x="80" y="214" rx="15" width="68" height="30" fill="#ffffff" fill-opacity="0.18"/><text x="114" y="234" text-anchor="middle" font-size="15" fill="#fff" font-weight="600">macOS</text><rect x="160.0" y="214" rx="15" width="68" height="30" fill="#ffffff" fill-opacity="0.18"/><text x="194" y="234" text-anchor="middle" font-size="15" fill="#fff" font-weight="600">Swift</text><rect x="240.0" y="214" rx="15" width="86" height="30" fill="#ffffff" fill-opacity="0.18"/><text x="283" y="234" text-anchor="middle" font-size="15" fill="#fff" font-weight="600">launchd</text><rect x="338.4" y="214" rx="15" width="151" height="30" fill="#ffffff" fill-opacity="0.18"/><text x="414" y="234" text-anchor="middle" font-size="15" fill="#fff" font-weight="600">Home Assistant</text>
+</svg>
