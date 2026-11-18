@@ -111,25 +111,29 @@ enum Updater {
         }
 
         // Austausch erst, wenn diese App beendet ist; bei Fehler alte App zurücklegen.
+        // Läuft als eigener launchd-Job: Kindprozesse der App räumt macOS beim Beenden mit ab.
+        // Der Job läuft nur einmal (WORK als Marker) und entfernt sich danach selbst.
+        let label = "com.example.mac2mqtt-update.\(UUID().uuidString.prefix(8))"
         let script = """
-        APP="$1"; NEW="$2"; PID="$3"; WORK="$4"
-        while kill -0 "$PID" 2>/dev/null; do sleep 0.2; done
-        rm -rf "$APP.alt"
-        if mv "$APP" "$APP.alt" && mv "$NEW" "$APP"; then
+        APP="$1"; NEW="$2"; PID="$3"; WORK="$4"; LABEL="$5"
+        if [ -d "$WORK" ]; then
+          while kill -0 "$PID" 2>/dev/null; do sleep 0.2; done
           rm -rf "$APP.alt"
-        else
-          [ -d "$APP" ] || mv "$APP.alt" "$APP"
+          if mv "$APP" "$APP.alt" && mv "$NEW" "$APP"; then
+            rm -rf "$APP.alt"
+          else
+            [ -d "$APP" ] || mv "$APP.alt" "$APP"
+          fi
+          rm -rf "$WORK"
+          sleep 0.5
+          open "$APP"
         fi
-        rm -rf "$WORK"
-        open "$APP"
+        /bin/launchctl remove "$LABEL"
         """
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/sh")
-        p.arguments = ["-c", script, "mac2mqtt-update", target.path, newApp.path,
-                       String(ProcessInfo.processInfo.processIdentifier), work.path]
-        p.standardOutput = FileHandle.nullDevice
-        p.standardError = FileHandle.nullDevice
-        try p.run()
+        let (submitCode, submitOut) = run("/bin/launchctl", ["submit", "-l", label, "--", "/bin/sh", "-c", script, "mac2mqtt-update",
+                                                              target.path, newApp.path, String(ProcessInfo.processInfo.processIdentifier),
+                                                              work.path, label])
+        guard submitCode == 0 else { throw UpdateError.installFailed("launchctl submit: \(submitOut)") }
         NSApp.terminate(nil)
     }
 }
