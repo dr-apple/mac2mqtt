@@ -18,7 +18,7 @@ A modernised Swift version of [`mac2mqtt`](https://github.com/bessarabov/mac2mqt
 1. Download the latest version from [Releases](https://github.com/dr-apple/mac2mqtt/releases) or build it yourself (see below) and drag `Mac2MQTT.app` to *Applications*.
 2. Launch it → menu bar icon → **Settings**: enter MQTT host, user, password and computer name.
 3. **Start Service** – done. The topics appear in MQTT under `mac2mqtt/<computerName>/…`.
-4. In Home Assistant install the [Mac2MQTT for Home Assistant](https://github.com/dr-apple/mac2mqtt-for-home-assisatant) integration – you get one device per Mac with all entities.
+4. In Home Assistant install the [Mac2MQTT for Home Assistant](https://github.com/dr-apple/mac2mqtt-for-home-assistant) integration – you get one device per Mac with all entities.
 
 ![Example: watching the status topics and sending commands](docs/images/mqtt-topics.svg)
 
@@ -169,7 +169,7 @@ In the menu bar:
 
 ## Home Assistant
 
-The MQTT topics are deliberately compatible with the original `mac2mqtt`, so existing automations keep working. The most convenient way is the HACS integration [mac2mqtt-for-home-assisatant](https://github.com/dr-apple/mac2mqtt-for-home-assisatant).
+The MQTT topics are deliberately compatible with the original `mac2mqtt`, so existing automations keep working. The most convenient way is the HACS integration [mac2mqtt-for-home-assistant](https://github.com/dr-apple/mac2mqtt-for-home-assistant).
 
 Without the integration, e.g. a plain MQTT sensor:
 
