@@ -28,6 +28,12 @@ Modernisierte Swift-Version von [`mac2mqtt`](https://github.com/bessarabov/mac2m
 
 ![Beispiel: Status-Topics mitlesen und Befehle senden](docs/images/mqtt-topics.svg)
 
+## Updates
+
+Ab Version 0.13 sucht die Menüleisten-App selbst nach neuen Versionen: kurz nach dem Start und danach alle 24 Stunden (oder sofort über **Nach Updates suchen …**). Gibt es ein neues Release, fragt sie einmal nach; **Installieren** lädt `Mac2MQTT.zip` von GitHub, ersetzt die App, startet sie neu und bringt den Dienst (`mac2mqttd` und den Now-Playing-Helfer) automatisch auf den neuen Stand. Die installierte Version steht im Menü.
+
+Von 0.12 oder älter einmal von Hand aktualisieren (App ersetzen, starten, **Restart Service**) – danach geht es automatisch.
+
 ## Konfiguration (`~/mac2mqtt/mac2mqtt.yaml`)
 
 ```yaml

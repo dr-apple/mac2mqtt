@@ -194,11 +194,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var monitorTimer: Timer?
     private var settingsWindow: NSWindow?
     private var logsWindow: NSWindow?
+    private var updateTimer: Timer?
+    private var updateMenuItem: NSMenuItem?
+    private var availableRelease: ReleaseInfo?
+    private var updateBusy = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ensureBaseFiles()
+        syncRuntimeIfBundleChanged()
         buildMenu()
         refreshStateTitle()
+        // Automatisch nach Updates suchen: kurz nach dem Start, danach alle 24 Stunden
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in self?.checkForUpdates(interactive: false) }
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 24 * 3600, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkForUpdates(interactive: false) }
+        }
         monitorTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.refreshStateTitle()
@@ -221,6 +231,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Settings", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "Logs", action: #selector(openLogs), keyEquivalent: "l"))
+        menu.addItem(.separator())
+        let update = NSMenuItem(title: "Nach Updates suchen …", action: #selector(updateMenuClicked), keyEquivalent: "u")
+        menu.addItem(update)
+        updateMenuItem = update
+        let version = NSMenuItem(title: "Version \(Updater.currentVersion)", action: nil, keyEquivalent: "")
+        version.isEnabled = false
+        menu.addItem(version)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q"))
 
@@ -347,6 +364,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
         logsWindow = window
+    }
+
+    @objc private func updateMenuClicked() {
+        if let release = availableRelease {
+            askToInstall(release)
+        } else {
+            checkForUpdates(interactive: true)
+        }
+    }
+
+    /// interactive = vom Menü ausgelöst (dann auch „aktuell“/Fehler melden).
+    private func checkForUpdates(interactive: Bool) {
+        guard !updateBusy else { return }
+        updateBusy = true
+        Task { @MainActor in
+            defer { updateBusy = false }
+            do {
+                let release = try await Updater.fetchLatest()
+                guard Updater.isNewer(release.version, than: Updater.currentVersion) else {
+                    availableRelease = nil
+                    updateMenuItem?.title = "Nach Updates suchen …"
+                    if interactive { showAlert("Kein Update", "Mac2MQTT \(Updater.currentVersion) ist aktuell.") }
+                    return
+                }
+                availableRelease = release
+                updateMenuItem?.title = "Update auf \(release.version) installieren …"
+                // Automatisch nur einmal pro Version nachfragen
+                let key = "updateAskedVersion"
+                if interactive || UserDefaults.standard.string(forKey: key) != release.version {
+                    UserDefaults.standard.set(release.version, forKey: key)
+                    askToInstall(release)
+                }
+            } catch {
+                if interactive { showAlert("Update-Prüfung fehlgeschlagen", error.localizedDescription) }
+            }
+        }
+    }
+
+    private func askToInstall(_ release: ReleaseInfo) {
+        let alert = NSAlert()
+        alert.messageText = "Mac2MQTT \(release.version) ist verfügbar"
+        let notes = release.notes.count > 900 ? String(release.notes.prefix(900)) + " …" : release.notes
+        alert.informativeText = "Installiert: \(Updater.currentVersion)\n\n\(notes)\n\nDie App wird ersetzt und neu gestartet, der Dienst danach automatisch aktualisiert."
+        alert.addButton(withTitle: "Installieren")
+        alert.addButton(withTitle: "Später")
+        alert.addButton(withTitle: "Release ansehen")
+        NSApp.activate(ignoringOtherApps: true)
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            updateMenuItem?.title = "Update wird installiert …"
+            Task { @MainActor in
+                do { try await Updater.install(release) } catch {
+                    updateMenuItem?.title = "Update auf \(release.version) installieren …"
+                    showAlert("Update fehlgeschlagen", error.localizedDescription)
+                }
+            }
+        case .alertThirdButtonReturn:
+            NSWorkspace.shared.open(release.pageURL)
+        default:
+            break
+        }
     }
 
     @objc private func quitApp() {

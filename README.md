@@ -69,6 +69,12 @@ Media state has its own polling interval (`intervals.mediaSeconds`, default `1`)
 
 Topic scheme: `<base>/<computerName>/status/...` and `<base>/<computerName>/command/...`
 
+## Updates
+
+From version 0.13 the menu bar app checks for new versions itself: shortly after launch and then every 24 hours (or right away via **Nach Updates suchen …**). When a new release is available it asks once; **Installieren** downloads `Mac2MQTT.zip` from GitHub, replaces the app, relaunches it and brings the service (`mac2mqttd` and the Now Playing helper) up to date automatically. The installed version is shown in the menu.
+
+Coming from 0.12 or older, update once by hand (replace the app, launch it, **Restart Service**) – after that it is automatic.
+
 ## Configuration (`~/mac2mqtt/mac2mqtt.yaml`)
 
 ```yaml
