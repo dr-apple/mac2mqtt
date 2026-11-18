@@ -127,5 +127,10 @@ cat > "${APP_DIR}/Contents/Info.plist" <<'EOF'
 </plist>
 EOF
 
+# Versionsnummer aus VERSION (wird von der Update-Funktion verglichen)
+VERSION="$(tr -d '[:space:]' < ./VERSION)"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "${APP_DIR}/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}" "${APP_DIR}/Contents/Info.plist"
+
 echo "Done: ${APP_DIR}"
 echo "Now drag ${APP_NAME} into Applications."
