@@ -13,6 +13,12 @@ Modernisierte Swift-Version von [`mac2mqtt`](https://github.com/bessarabov/mac2m
 
 ![So funktioniert's: Menüleisten-App → mac2mqttd → MQTT → Home Assistant](docs/images/how-it-works.svg)
 
+## Video
+
+[![Video: „Dein Mac. In Home Assistant.“ – Mac2MQTT auf YouTube](docs/images/video-thumbnail.jpg)](https://youtu.be/dFKfCVW2rZc)
+
+▶ **[Auf YouTube ansehen](https://youtu.be/dFKfCVW2rZc)** (ca. 3 Minuten): Installation über den Home-Assistant-Marketplace und alle Funktionen in Aktion. Dazu gibt es einen [40-Sekunden-Short](https://youtube.com/shorts/s4F8T1BCyOY).
+
 ## Schnellstart
 
 1. Neueste Version unter [Releases](https://github.com/dr-apple/mac2mqtt/releases) laden oder selbst bauen (siehe unten) und `Mac2MQTT.app` nach „Programme“ ziehen.
