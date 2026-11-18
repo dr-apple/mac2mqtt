@@ -14,6 +14,11 @@ let package = Package(
         .executable(
             name: "mac2mqtt-ui",
             targets: ["Mac2MQTTControl"]
+        ),
+        .library(
+            name: "Mac2MQTTNowPlaying",
+            type: .dynamic,
+            targets: ["Mac2MQTTNowPlaying"]
         )
     ],
     dependencies: [
@@ -27,6 +32,10 @@ let package = Package(
                 "CocoaMQTT",
                 "Yams"
             ]
+        ),
+        .target(
+            name: "Mac2MQTTNowPlaying",
+            linkerSettings: [.linkedFramework("Foundation")]
         ),
         .executableTarget(
             name: "Mac2MQTTControl",

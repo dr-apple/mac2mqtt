@@ -197,6 +197,7 @@ data:
 |---|---|
 | No topics in the broker | Open **Logs** in the menu bar – usually a wrong host or credentials. |
 | Volume/media don't react | macOS asks for Automation/Accessibility permissions the first time – allow them. |
+| `media_playing` is wrong / play resumes the wrong app | Since macOS 15.4 Apple blocks “Now Playing” for third-party processes. mac2mqttd therefore queries it through `/usr/bin/perl` with `libMac2MQTTNowPlaying.dylib` (next to `mac2mqttd`). The log must show “Now Playing: Helfer gestartet”. |
 | Service doesn't start after reboot | Check `launchctl print gui/$(id -u)/com.example.mac2mqttd` or press **Start Service** in the app again. |
 
 ## License

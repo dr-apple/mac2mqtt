@@ -33,6 +33,7 @@ enum Paths {
     static let home = NSHomeDirectory()
     static let appDir = "\(home)/mac2mqtt"
     static let daemonPath = "\(appDir)/mac2mqttd"
+    static let nowPlayingLibName = "libMac2MQTTNowPlaying.dylib"
     static let configPath = "\(appDir)/mac2mqtt.yaml"
     static let plistPath = "\(home)/Library/LaunchAgents/com.example.mac2mqttd.plist"
     static let logsPath = "\(home)/Library/Logs/mac2mqttd.log"
@@ -91,6 +92,15 @@ func installBundledRuntimeIfNeeded() -> String? {
             try fm.removeItem(atPath: Paths.daemonPath)
             try fm.copyItem(atPath: bundledDaemon, toPath: Paths.daemonPath)
             _ = run("/bin/chmod", ["755", Paths.daemonPath])
+        }
+
+        // Now-Playing-Helfer (wird von mac2mqttd über /usr/bin/perl geladen)
+        if let bundledLib = bundledResourcePath(Paths.nowPlayingLibName), fm.fileExists(atPath: bundledLib) {
+            let target = "\(Paths.appDir)/\(Paths.nowPlayingLibName)"
+            if !fm.fileExists(atPath: target) || filesDiffer(bundledLib, target) {
+                try? fm.removeItem(atPath: target)
+                try fm.copyItem(atPath: bundledLib, toPath: target)
+            }
         }
 
         if !fm.fileExists(atPath: Paths.configPath) {
