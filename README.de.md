@@ -241,6 +241,7 @@ data:
 |---|---|
 | Keine Topics im Broker | In der Menüleiste **Logs** öffnen – meist falscher Host oder falsche Zugangsdaten. |
 | Lautstärke/Medien reagieren nicht | macOS fragt beim ersten Mal nach Automations-/Bedienungshilfen-Rechten – zulassen. |
+| `media_playing` stimmt nicht / Play setzt falsche App fort | Seit macOS 15.4 sperrt Apple „Now Playing“ für fremde Programme. mac2mqttd fragt es deshalb über `/usr/bin/perl` mit `libMac2MQTTNowPlaying.dylib` (liegt neben `mac2mqttd`) ab. In den Logs muss „Now Playing: Helfer gestartet“ stehen. |
 | Dienst startet nach Neustart nicht | `launchctl print gui/$(id -u)/com.example.mac2mqttd` prüfen bzw. in der App erneut **Start Service**. |
 
 ## Lizenz

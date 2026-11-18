@@ -85,7 +85,13 @@ func setVolume(_ value: Int) throws {
 
 func setMuted(_ value: Bool) throws {
     let script = value ? "set volume with output muted" : "set volume without output muted"
-    _ = try runProcess("/usr/bin/osascript", ["-e", script])
+    for attempt in 1...2 {
+        _ = try runProcess("/usr/bin/osascript", ["-e", script])
+        if (try? isMuted()) == value { return }
+        logMessage("Mute: Zustand nach Versuch \(attempt) nicht \(value), wiederhole")
+        Thread.sleep(forTimeInterval: 0.2)
+    }
+    throw NSError(domain: "mac2mqtt", code: 1, userInfo: [NSLocalizedDescriptionKey: "mute=\(value) wurde nicht übernommen"])
 }
 
 enum MediaPlaybackCommand {
@@ -222,15 +228,106 @@ final class MediaRemote: @unchecked Sendable {
         return true
     }
 
-    private func isMediaPlaybackActiveByAssertions() -> Bool? {
+    func isMediaPlaybackActiveByAssertions() -> Bool? {
         guard let output = try? runProcess("/usr/bin/pmset", ["-g", "assertions"]) else {
             return nil
         }
 
-        let lowercased = output.lowercased()
-        return lowercased.contains("playing audio") ||
-            lowercased.contains("video wake lock") ||
-            lowercased.contains("resources: audio-out")
+        // Nur echte „Playing audio“-Zusicherungen von Apps (Browser, Player).
+        // "resources: audio-out" (coreaudiod) und "Video Wake Lock" bleiben oft stehen, obwohl nichts läuft.
+        return output.lowercased().contains("named: \"playing audio\"")
+    }
+}
+
+/// Startet /usr/bin/perl mit libMac2MQTTNowPlaying.dylib und liest den Now-Playing-Zustand als JSON-Zeilen.
+final class NowPlayingMonitor: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var buffer = Data()
+    private var state: Bool?
+    private var pid: Int32?
+    private var lastUpdate = Date.distantPast
+    private var stopped = false
+    private var failures = 0
+    var onChange: ((Bool) -> Void)?
+
+    static func libraryPath() -> String? {
+        let fm = FileManager.default
+        let name = "libMac2MQTTNowPlaying.dylib"
+        var dirs: [String] = []
+        if let exe = Bundle.main.executableURL?.resolvingSymlinksInPath().deletingLastPathComponent().path { dirs.append(exe) }
+        dirs.append("\(NSHomeDirectory())/mac2mqtt")
+        return dirs.map { "\($0)/\(name)" }.first { fm.fileExists(atPath: $0) }
+    }
+
+    /// PID der aktuellen Now-Playing-App (nil, wenn unbekannt).
+    var nowPlayingPID: Int32? {
+        lock.lock(); defer { lock.unlock() }
+        return Date().timeIntervalSince(lastUpdate) < 15 ? pid : nil
+    }
+
+    /// true/false, wenn der Helfer läuft und frisch gemeldet hat; sonst nil.
+    var playing: Bool? {
+        lock.lock(); defer { lock.unlock() }
+        return Date().timeIntervalSince(lastUpdate) < 15 ? state : nil
+    }
+
+    func start() {
+        guard let lib = Self.libraryPath() else {
+            logMessage("Now Playing: libMac2MQTTNowPlaying.dylib nicht gefunden, nutze Fallback")
+            return
+        }
+        let script = "use DynaLoader; my $l = DynaLoader::dl_load_file($ARGV[0], 0) or die DynaLoader::dl_error(); " +
+            "my $s = DynaLoader::dl_find_symbol($l, 'mac2mqtt_np_stream') or die 'symbol'; " +
+            "&{DynaLoader::dl_install_xsub('main::np', $s)}();"
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+        p.arguments = ["-e", script, lib]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        out.fileHandleForReading.readabilityHandler = { [weak self] h in
+            let data = h.availableData
+            if data.isEmpty { h.readabilityHandler = nil; return }
+            self?.consume(data)
+        }
+        p.terminationHandler = { [weak self] _ in
+            guard let self else { return }
+            self.lock.lock(); let stop = self.stopped; self.failures += 1; let f = self.failures; self.lock.unlock()
+            if stop { return }
+            logMessage("Now Playing: Helfer beendet, Neustart in \(min(60, 2 * f)) s")
+            DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(min(60, 2 * f))) { self.start() }
+        }
+        do {
+            try p.run()
+            lock.lock(); process = p; lock.unlock()
+            logMessage("Now Playing: Helfer gestartet (\(lib))")
+        } catch {
+            logMessage("Now Playing: Start fehlgeschlagen: \(error)")
+        }
+    }
+
+    func stop() {
+        lock.lock(); stopped = true; let p = process; lock.unlock()
+        p?.terminate()
+    }
+
+    private func consume(_ data: Data) {
+        lock.lock()
+        buffer.append(data)
+        var changed: Bool?
+        while let nl = buffer.firstIndex(of: 0x0A) {
+            let line = buffer.subdata(in: buffer.startIndex..<nl)
+            buffer.removeSubrange(buffer.startIndex...nl)
+            guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                  let playing = obj["playing"] as? Bool else { continue }
+            failures = 0
+            lastUpdate = Date()
+            if let p = obj["pid"] as? Int, p > 0 { pid = Int32(p) } else { pid = nil }
+            if state != playing { state = playing; changed = playing }
+        }
+        lock.unlock()
+        if let changed { onChange?(changed) }
     }
 }
 
@@ -372,10 +469,44 @@ func speak(_ text: String) throws {
     _ = try runProcess("/usr/bin/say", [text])
 }
 
+/// Liefert den aktuellen Wiedergabe-Zustand (vom Daemon gesetzt: Now-Playing-Helfer, sonst Fallback).
+nonisolated(unsafe) var currentMediaPlaying: () -> Bool? = { MediaRemote.shared.isPlaying() }
+/// PID der Now-Playing-App (vom Daemon gesetzt).
+nonisolated(unsafe) var currentNowPlayingPID: () -> Int32? = { nil }
+
+/// Setzt die Wiedergabe der App fort, die vorher abgespielt hat – nie eine andere.
+/// macOS vergibt „Now Playing“ nach einer Pause manchmal an eine andere App (z. B. einen Browser-Tab);
+/// ein globales „Play“ würde dann die falsche App starten.
+func resumePlayback(of pid: Int32?) {
+    let now = currentNowPlayingPID()
+    if pid == nil || now == nil || now == pid {
+        _ = MediaRemote.shared.send(.play)
+        return
+    }
+    guard let pid, let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier else {
+        logMessage("Wiedergabe nicht fortgesetzt: Now Playing hat gewechselt (\(pid ?? -1) -> \(now ?? -1))")
+        return
+    }
+    let scripts: [String: String] = [
+        "com.apple.Music": "tell application id \"com.apple.Music\" to play",
+        "com.spotify.client": "tell application id \"com.spotify.client\" to play",
+        "com.apple.TV": "tell application id \"com.apple.TV\" to play",
+        "com.apple.QuickTimePlayerX": "tell application id \"com.apple.QuickTimePlayerX\" to play document 1",
+    ]
+    if let script = scripts[bundle] {
+        if (try? runProcess("/usr/bin/osascript", ["-e", script])) == nil {
+            logMessage("Wiedergabe von \(bundle) per AppleScript fehlgeschlagen")
+        }
+    } else {
+        logMessage("Wiedergabe nicht fortgesetzt: Now Playing wechselte von \(bundle) zu einer anderen App")
+    }
+}
+
 func speakWithMediaPauseAndMuteRestore(_ text: String) throws {
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
-    let wasPlaying = MediaRemote.shared.isPlaying() == true
+    let wasPlaying = currentMediaPlaying() == true
+    let playingPID = currentNowPlayingPID()
     let wasMuted = (try? isMuted()) ?? false
 
     if wasPlaying {
@@ -394,7 +525,7 @@ func speakWithMediaPauseAndMuteRestore(_ text: String) throws {
             try? setMuted(true)
         }
         if wasPlaying {
-            _ = MediaRemote.shared.send(.play)
+            resumePlayback(of: playingPID)
         }
         throw error
     }
@@ -404,7 +535,7 @@ func speakWithMediaPauseAndMuteRestore(_ text: String) throws {
     }
     if wasPlaying {
         Thread.sleep(forTimeInterval: 0.25)
-        _ = MediaRemote.shared.send(.play)
+        resumePlayback(of: playingPID)
     }
 }
 
@@ -613,6 +744,8 @@ final class Daemon: NSObject, CocoaMQTTDelegate, @unchecked Sendable {
     private let config: AppConfig
     private let mqtt: CocoaMQTT
     private let workQueue = DispatchQueue(label: "com.example.mac2mqttd.status", qos: .utility)
+    private let commandQueue = DispatchQueue(label: "com.example.mac2mqttd.commands", qos: .userInitiated)
+    private let nowPlaying = NowPlayingMonitor()
     private var lockedState = isSessionLocked()
     private var volumeTimer: DispatchSourceTimer?
     private var batteryTimer: DispatchSourceTimer?
@@ -653,6 +786,12 @@ final class Daemon: NSObject, CocoaMQTTDelegate, @unchecked Sendable {
     func start() {
         setbuf(stdout, nil)
         registerLockNotifications()
+        nowPlaying.onChange = { [weak self] _ in
+            self?.workQueue.async { self?.publishMediaPlaybackStatus() }
+        }
+        nowPlaying.start()
+        currentMediaPlaying = { [weak self] in self?.combinedMediaPlaying() }
+        currentNowPlayingPID = { [weak self] in self?.nowPlaying.nowPlayingPID }
         logMessage("Starting mac2mqttd ...")
         _ = mqtt.connect()
     }
@@ -740,14 +879,25 @@ final class Daemon: NSObject, CocoaMQTTDelegate, @unchecked Sendable {
         mediaOverrideState = nil
 
         suppressAssertionPlayingUntil = nil
-        return MediaRemote.shared.isPlaying()
+        return combinedMediaPlaying()
+    }
+
+    /// Now Playing (perl-Helfer) ist die Hauptquelle; „Playing audio“-Zusicherungen fangen
+    /// Apps ab, die gerade nicht „Now Playing“ sind (z. B. ein Browser-Tab im Hintergrund).
+    private func combinedMediaPlaying() -> Bool? {
+        guard let np = nowPlaying.playing else { return MediaRemote.shared.isPlaying() }
+        if np { return true }
+        return MediaRemote.shared.isMediaPlaybackActiveByAssertions() ?? false
     }
 
     private func overrideMediaPlayingState(_ isPlaying: Bool, duration: TimeInterval = 2.5) {
-        mediaOverrideState = isPlaying
-        mediaOverrideUntil = Date().addingTimeInterval(duration)
-        suppressAssertionPlayingUntil = isPlaying ? nil : Date().addingTimeInterval(duration)
-        publishMediaPlaybackStatus(force: true)
+        workQueue.async { [weak self] in
+            guard let self else { return }
+            self.mediaOverrideState = isPlaying
+            self.mediaOverrideUntil = Date().addingTimeInterval(duration)
+            self.suppressAssertionPlayingUntil = isPlaying ? nil : Date().addingTimeInterval(duration)
+            self.publishMediaPlaybackStatus(force: true)
+        }
     }
 
     private func expectedMediaState(after command: MediaPlaybackCommand) -> Bool? {
@@ -865,10 +1015,10 @@ final class Daemon: NSObject, CocoaMQTTDelegate, @unchecked Sendable {
         switch topic {
         case "\(baseTopic)/command/volume":
             if let value = Int(payload) {
-                try? setVolume(value)
+                logIfFails("volume \(value)") { try setVolume(value) }
             }
         case "\(baseTopic)/command/mute":
-            try? setMuted(payload.lowercased() == "true")
+            logIfFails("mute \(payload)") { try setMuted(payload.lowercased() == "true") }
         case "\(baseTopic)/command/sleep":
             if payload == "sleep" { try? sleepMac() }
         case "\(baseTopic)/command/shutdown":
@@ -884,9 +1034,9 @@ final class Daemon: NSObject, CocoaMQTTDelegate, @unchecked Sendable {
                 try? displayWake()
             }
         case "\(baseTopic)/command/say":
-            try? speakWithMediaPauseAndMuteRestore(payload)
+            logIfFails("say") { try speakWithMediaPauseAndMuteRestore(payload) }
         case "\(baseTopic)/command/notification":
-            try? showNotification(payload)
+            logIfFails("notification") { try showNotification(payload) }
         case "\(baseTopic)/command/screensaver":
             if let saver = screenSaver(for: payload) {
                 try? setScreenSaver(saver)
@@ -895,7 +1045,7 @@ final class Daemon: NSObject, CocoaMQTTDelegate, @unchecked Sendable {
                 try? startScreenSaver()
             }
         case "\(baseTopic)/command/app":
-            try? launchOrActivateApp(payload)
+            logIfFails("app \(payload)") { try launchOrActivateApp(payload) }
         case "\(baseTopic)/command/media_playback":
             if let command = parseMediaPlaybackCommand(payload) {
                 let expectedState = expectedMediaState(after: command)
@@ -922,7 +1072,11 @@ final class Daemon: NSObject, CocoaMQTTDelegate, @unchecked Sendable {
             break
         }
 
-        publishStatus()
+        workQueue.async { [weak self] in self?.publishStatus() }
+    }
+
+    private func logIfFails(_ what: String, _ body: () throws -> Void) {
+        do { try body() } catch { logMessage("Befehl \(what) fehlgeschlagen: \(error)") }
     }
 
     func mqtt(_ mqtt: CocoaMQTT, didConnectAck ack: CocoaMQTTConnAck) {
@@ -955,7 +1109,8 @@ final class Daemon: NSObject, CocoaMQTTDelegate, @unchecked Sendable {
     }
     func mqtt(_ mqtt: CocoaMQTT, didReceiveMessage message: CocoaMQTTMessage, id: UInt16) {
         let payload = message.string ?? ""
-        handleCommand(topic: message.topic, payload: payload)
+        let topic = message.topic
+        commandQueue.async { [weak self] in self?.handleCommand(topic: topic, payload: payload) }
     }
 }
 

@@ -91,6 +91,7 @@ iconutil -c icns "${ICONSET_DIR}" -o "${APP_DIR}/Contents/Resources/AppIcon.icns
 
 cp "${BUILD_DIR}/release/mac2mqtt-ui" "${APP_DIR}/Contents/MacOS/mac2mqtt-ui"
 cp "${BUILD_DIR}/release/mac2mqttd" "${APP_DIR}/Contents/Resources/mac2mqttd"
+cp "${BUILD_DIR}/release/libMac2MQTTNowPlaying.dylib" "${APP_DIR}/Contents/Resources/libMac2MQTTNowPlaying.dylib"
 cp "./mac2mqtt.yaml.example" "${APP_DIR}/Contents/Resources/mac2mqtt.yaml.example"
 chmod +x "${APP_DIR}/Contents/MacOS/mac2mqtt-ui"
 chmod +x "${APP_DIR}/Contents/Resources/mac2mqttd"
